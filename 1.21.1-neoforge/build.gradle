@@ -1,0 +1,286 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.neoforged.moddev' version '2.0.119'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+// mod_dev standard: [modname]-[mod version]-[mcversion]-[launcher].jar
+tasks.named('jar', Jar) {
+    archiveFileName = "${mod_id}-${mod_version}-${minecraft_version}-neoforge.jar"
+    from('LICENSE') { rename { "LICENSE_${mod_id}" } }
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+// Optional packaged-build comparison. Give the test server an extracted jar
+// as its Skein mod, keeping current production classes off its runtime path.
+def benchmarkSkeinJar = providers.gradleProperty('benchmarkSkeinJar').orNull
+if (benchmarkSkeinJar != null) {
+    sourceSets { benchmarkSkein }
+    def stageBenchmarkSkein = tasks.register('stageBenchmarkSkein', Sync) {
+        from zipTree(file(benchmarkSkeinJar))
+        into layout.buildDirectory.dir('benchmark-skein')
+    }
+    sourceSets.benchmarkSkein.output.dir(layout.buildDirectory.dir('benchmark-skein'), builtBy: stageBenchmarkSkein)
+}
+
+repositories {
+    mavenCentral()
+}
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        // Skein is a server-side mod; the client run exists only to prove that
+        // loading it on an integrated server does not explode.
+        client {
+            client()
+        }
+        server {
+            server()
+            programArgument '--nogui'
+        }
+        configureEach {
+            logLevel = org.slf4j.event.Level.INFO
+            // Mixin's own audit output is the fastest way to see that an
+            // injector silently failed to apply, which otherwise just looks
+            // like "the mod does nothing".
+            systemProperty 'mixin.debug.export', 'true'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(benchmarkSkeinJar == null ? sourceSets.main : sourceSets.benchmarkSkein)
+        }
+    }
+}
+
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// Empty stand-ins for the few classes of other mods that a compatibility mixin
+// names as a return type. Compiled against, never packaged: the real classes
+// come from the mods themselves, and those mixins only load when they do.
+sourceSets {
+    compatStubs
+}
+dependencies {
+    compileOnly sourceSets.compatStubs.output
+}
+
+// Exercise the scheduling algorithms without booting Minecraft. Tiny test-only
+// stand-ins supply entity positions, buffers and worker threads; the algorithms
+// themselves are compiled directly from the production sources.
+sourceSets {
+    coreTest {
+        compileClasspath = configurations.compileClasspath.filter { it.name.startsWith('fastutil-') }
+        runtimeClasspath = output + compileClasspath
+    }
+}
+tasks.named('compileCoreTestJava', JavaCompile) {
+    source files(['EntityLevels', 'PointGrid', 'SpatialBounds', 'ClusterPartition', 'Grid', 'Partition', 'SkeinPool'].collect {
+        "src/main/java/com/theproknightgamer/skein/core/${it}.java"
+    })
+}
+def coreTest = tasks.register('coreTest', JavaExec) {
+    group = 'verification'
+    description = 'Check spatial partitions and nested worker barriers against reference results.'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    jvmArgs '-ea'
+    timeout = java.time.Duration.ofSeconds(60)
+}
+tasks.named('check') { dependsOn coreTest }
+tasks.register('sourceArchive', Zip) {
+    group = 'build'
+    description = 'Package shareable source without local worlds, logs, caches, or machine-specific launch files.'
+    archiveClassifier = 'sources'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(projectDir) {
+        include 'src/**', 'docs/**', 'gradle/**', 'gradlew', 'gradlew.bat'
+        include 'README.md', 'LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties', '.gitignore'
+    }
+}
+tasks.register('coreBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Measure scheduling algorithms (microbenchmarks, not server tick rates).'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    args '--benchmark'
+    jvmArgs '-Xms512m', '-Xmx512m'
+}
+
+// Opt-in integration fixture; no test mod or optional dependency enters the jar.
+// Use -PspeedeeTestJar=/absolute/path/to/speedeeentity.jar (or "none").
+// Add -PorbitalTestJar=/absolute/path/to/cannon.jar to test strikes with all CPU threads.
+if (providers.gradleProperty('speedeeTestJar').isPresent()) {
+    def speedeeJar = providers.gradleProperty('speedeeTestJar').get()
+    def orbitalJar = providers.gradleProperty('orbitalTestJar').orNull
+    def cinematicBenchmark = providers.gradleProperty('cinematicBenchmark').isPresent()
+    def bubbleBenchmark = providers.gradleProperty('bubbleBenchmark').isPresent()
+    def stabBenchmark = providers.gradleProperty('stabBenchmark').isPresent()
+    // A saved world replayed with its owner online: -PclientWorldTemplate=/path/to/world-copy
+    def clientWorldTemplate = providers.gradleProperty('clientWorldTemplate').orNull
+    def testConfigDir = providers.gradleProperty('testConfigDir').orNull
+    def extraTestModsDir = providers.gradleProperty('extraTestModsDir').orNull
+    def testDirectory = providers.gradleProperty('testDirectory').isPresent() ? file(providers.gradleProperty('testDirectory').get()) : providers.gradleProperty('conflictTest').isPresent() ? file('build/conflict-test') : bubbleBenchmark ? file('build/bubble-benchmark') : cinematicBenchmark ? file('build/cinematic-benchmark') : stabBenchmark ? file('build/stab-benchmark') : orbitalJar == null
+            ? file("build/speedee-compat-test/${speedeeJar == 'none' ? 'absent' : file(speedeeJar).name}")
+            : file('build/orbital-compat-test')
+    sourceSets {
+        compatTest {
+            compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+            runtimeClasspath += benchmarkSkeinJar == null ? sourceSets.main.output + sourceSets.main.runtimeClasspath
+                    : sourceSets.benchmarkSkein.output + (sourceSets.main.runtimeClasspath - sourceSets.main.output)
+        }
+    }
+    if (speedeeJar != 'none') {
+        if (!file(speedeeJar).isFile()) throw new GradleException("Missing SpeeDeeEntity jar: ${speedeeJar}")
+        dependencies { runtimeOnly files(speedeeJar) }
+    }
+    if (orbitalJar != null) {
+        if (!file(orbitalJar).isFile()) throw new GradleException("Missing Orbital Strike Cannon jar: ${orbitalJar}")
+        dependencies { runtimeOnly files(orbitalJar) }
+    }
+    if (extraTestModsDir != null) {
+        if (!file(extraTestModsDir).isDirectory()) throw new GradleException("Missing extra test mods directory: ${extraTestModsDir}")
+    }
+    if (testConfigDir != null && !file(testConfigDir).isDirectory()) {
+        throw new GradleException("Missing test config directory: ${testConfigDir}")
+    }
+    neoForge {
+        mods {
+            skein_speedee_test { sourceSet sourceSets.compatTest }
+        }
+        runs {
+            speedeeTest {
+                server()
+                gameDirectory = testDirectory
+                programArgument '--nogui'
+                systemProperty 'skein.test.orbital', (orbitalJar != null).toString()
+                systemProperty 'skein.test.cinematic', cinematicBenchmark.toString()
+                systemProperty 'skein.test.profile', providers.gradleProperty('cinematicProfile').isPresent().toString()
+                systemProperty 'skein.test.cpu', providers.gradleProperty('cinematicCpu').isPresent().toString()
+                systemProperty 'skein.test.bubble', bubbleBenchmark.toString()
+                systemProperty 'skein.test.bystander', providers.gradleProperty('bubbleBystander').isPresent().toString()
+                systemProperty 'skein.test.stab', stabBenchmark.toString()
+                systemProperty 'skein.test.conflict', providers.gradleProperty('conflictTest').isPresent().toString()
+                systemProperty 'skein.test.demotion', providers.gradleProperty('demotionTest').isPresent().toString()
+                systemProperty 'skein.test.alternateCurrent', providers.gradleProperty('alternateCurrentTest').isPresent().toString()
+                systemProperty 'skein.test.piston', providers.gradleProperty('pistonTest').isPresent().toString()
+                systemProperty 'skein.test.clientWorld', (clientWorldTemplate != null).toString()
+                systemProperty 'skein.test.clientWorldCommand', providers.gradleProperty('clientWorldCommand').getOrElse('')
+                if (providers.gradleProperty('benchmarkSamples').isPresent()) systemProperty 'skein.test.samples', providers.gradleProperty('benchmarkSamples').get()
+                systemProperty 'skein.test.superchunk', providers.gradleProperty('superchunkTest').isPresent().toString()
+                systemProperty 'skein.test.expectSerialBenchmark', providers.gradleProperty('expectSerialBenchmark').isPresent().toString()
+                if (benchmarkSkeinJar != null) systemProperty 'skein.test.jar', file(benchmarkSkeinJar).absolutePath
+            }
+        }
+    }
+    def prepareSpeedeeTest = tasks.register('prepareSpeedeeTest') {
+        doLast {
+            testDirectory.mkdirs()
+            // Reuse the workspace's existing EULA agreement.
+            copy { from 'run/eula.txt'; into testDirectory }
+            new File(testDirectory, 'server.properties').text = '''server-ip=127.0.0.1
+server-port=0
+online-mode=false
+level-type=minecraft:flat
+generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains"}
+view-distance=2
+simulation-distance=2
+max-tick-time=60000
+''' + "level-name=world-${System.currentTimeMillis()}\n"
+            if (clientWorldTemplate != null) {
+                // The client ran render distance 32 and simulation distance 20.
+                new File(testDirectory, 'server.properties').text = '''server-ip=127.0.0.1
+server-port=0
+online-mode=false
+level-name=world
+view-distance=32
+simulation-distance=20
+allow-flight=true
+spawn-protection=0
+max-tick-time=-1
+enable-command-block=true
+'''
+                def world = new File(testDirectory, 'world')
+                if (world.exists()) world.deleteDir()
+                copy { from clientWorldTemplate; into world }
+            }
+            if (stabBenchmark) {
+                def props = new File(testDirectory, 'server.properties')
+                props.text = props.text.replace('"minecraft:dirt","height":2', '"minecraft:stone","height":123},{"block":"minecraft:dirt","height":3')
+                props.append('generate-structures=false\nlevel-seed=12345\n')
+            }
+            def config = new File(testDirectory, 'config')
+            config.mkdirs()
+            new File(config, 'skein-common.toml').text = '''[general]
+threadCount = 8
+crashPolicy = "RETHROW"
+''' + "adaptive = ${cinematicBenchmark || bubbleBenchmark || stabBenchmark}\nuseAllCpuThreads = ${orbitalJar != null || bubbleBenchmark}\n"
+            if (testConfigDir != null) copy { from testConfigDir; into config }
+            // Use the real mods directory so service/bootstrap jars are discovered too.
+            if (extraTestModsDir != null) copy {
+                from extraTestModsDir
+                include '*.jar'
+                into new File(testDirectory, 'mods')
+            }
+            new File(testDirectory, 'result.txt').text = 'PENDING\n'
+        }
+    }
+    tasks.named('runSpeedeeTest') {
+        dependsOn prepareSpeedeeTest
+        if (cinematicBenchmark || bubbleBenchmark || stabBenchmark || clientWorldTemplate != null) jvmArgs '-Xms4G', '-Xmx4G'
+        // Every test server stays within 4 GB, so several can share one machine.
+        else jvmArgs '-Xmx4G'
+        doLast {
+            if (!new File(testDirectory, 'result.txt').text.startsWith('PASS')) {
+                throw new GradleException("SpeeDeeEntity integration checks did not finish; see ${testDirectory}/logs/latest.log")
+            }
+        }
+    }
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}

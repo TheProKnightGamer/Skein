@@ -1,0 +1,53 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''${mod_description}'''
+logoFile = "skein_logo.png"
+logoBlur = false
+# Server-side only: no packets, no client code. NeoForge has no displayTest
+# (FML 11 never reads one); it lets a client without Skein join because Skein
+# registers no network payloads. Singleplayer gets it through the integrated
+# server.
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "${neo_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+# Everything this mod does happens in mixins. Without this stanza the mod loads,
+# registers its config, and then quietly does nothing at all.
+[[mixins]]
+config = "${mod_id}.mixins.json"
+
+# Lithium reads this table from every mod before it selects its mixins, and so
+# does the copy SuperChunk bundles. These nine features cache per-level state
+# that more than one thread in a level corrupts (see LithiumCompat), and with
+# any of them on Skein has to keep the in-level phases off. Asking for them off
+# here means installing both mods just works. Everything else Lithium does stays
+# on. A line in lithium.properties still wins over this, and Skein checks what
+# Lithium actually applied, so turning one back on only turns those phases off.
+["lithium:options"]
+"mixin.alloc.chunk_random" = false
+"mixin.util.world_border_listener" = false
+"mixin.world.block_entity_ticking.world_border" = false
+"mixin.world.chunk_access" = false
+"mixin.block.hopper" = false
+"mixin.chunk.entity_class_groups" = false
+"mixin.entity.inactive_navigations" = false
+"mixin.entity.collisions.unpushable_cramming" = false
+"mixin.util.block_entity_retrieval" = false

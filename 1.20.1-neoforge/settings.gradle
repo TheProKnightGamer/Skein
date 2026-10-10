@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url = 'https://maven.minecraftforge.net/' }
+        // MixinGradle (org.spongepowered.mixin)
+        maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.7.0'
+}
+
+rootProject.name = 'skein-1.20.1-neoforge'

@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.theproknightgamer.skein.compat.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "priority": 2000,
+  "mixins": [
+    "ChunkMapInvoker",
+    "DemotionCactusMixin",
+    "DemotionFurnaceMixin",
+    "DemotionProbeMixin",
+    "ServerExplosionInvoker",
+    "TrackingWindowMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

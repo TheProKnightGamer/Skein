@@ -1,0 +1,193 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[6.0.16,6.2)'
+    // Mixin annotation processor + refmap: Forge 1.20.1 runs SRG names, so
+    // every mixin target needs a refmap entry to survive reobfuscation.
+    id 'org.spongepowered.mixin' version '0.7.+'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+// NeoForge 1.20.1 targets Java 17.
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+// Compatibility mixins whose targets live in other mods (named by string,
+// remap = false). The Mixin annotation processor refuses a target it cannot
+// see, and these need no refmap entries, so they compile without it and ride
+// in the same jar. SkeinMixinPlugin adds each only when its mod is present.
+sourceSets {
+    compat {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+    }
+}
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'info'
+            // Mixin's own audit output is the fastest way to see that an
+            // injector silently failed to apply.
+            property 'mixin.debug.export', 'true'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                    source sourceSets.compat
+                }
+            }
+        }
+        client {
+        }
+        server {
+            args '--nogui'
+        }
+    }
+}
+
+jarJar.enable()
+
+repositories {
+    // NeoForge 1.20.1 (the fork-era loader, v47) is published on NeoForged's
+    // maven as net.neoforged:forge with a ForgeGradle-compatible userdev.
+    maven {
+        name = 'NeoForged'
+        url = 'https://maven.neoforged.net/releases'
+    }
+    mavenCentral()
+}
+
+mixin {
+    add sourceSets.main, "${mod_id}.refmap.json"
+    config "${mod_id}.mixins.json"
+}
+
+dependencies {
+    minecraft "net.neoforged:forge:${minecraft_version}-${forge_version}"
+
+    // 0.8.7 processor; the runtime Mixin stays Forge's bundled 0.8.5.
+    annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
+
+    compileOnly(annotationProcessor("io.github.llamalad7:mixinextras-common:${mixinextras_version}"))
+    implementation(jarJar("io.github.llamalad7:mixinextras-forge:${mixinextras_version}")) {
+        jarJar.ranged(it, "[${mixinextras_version},)")
+    }
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-Xmaxerrs' << '10000'
+}
+
+// The shipped jar is the jarJar output (it nests MixinExtras); the plain jar
+// is only an intermediate. Both carry the manifest, since Forge 1.20.1 finds
+// mixin configs through it rather than through mods.toml.
+tasks.withType(Jar).configureEach {
+    if (name in ['jar', 'jarJar']) {
+        from sourceSets.compat.output
+        from('LICENSE') { rename { "LICENSE_${mod_id}" } }
+        manifest {
+            attributes([
+                    'Specification-Title'   : mod_id,
+                    'Specification-Vendor'  : mod_authors,
+                    'Specification-Version' : '1',
+                    'Implementation-Title'  : mod_name,
+                    'Implementation-Version': mod_version,
+                    'Implementation-Vendor' : mod_authors,
+                    'MixinConfigs'          : "${mod_id}.mixins.json"
+            ])
+        }
+    }
+}
+
+// mod_dev standard: [modname]-[mod version]-[mcversion]-[launcher].jar
+tasks.named('jar', Jar) {
+    archiveClassifier = 'slim'
+}
+tasks.named('jarJar') {
+    archiveClassifier = ''
+    archiveFileName = "${mod_id}-${mod_version}-${minecraft_version}-neoforge.jar"
+}
+tasks.named('jar') { finalizedBy 'reobfJar' }
+tasks.named('jarJar') { finalizedBy 'reobfJarJar' }
+tasks.named('assemble') { dependsOn 'jarJar' }
+
+// Exercise the scheduling algorithms without booting Minecraft. Tiny test-only
+// stand-ins supply entity positions, buffers and worker threads; the algorithms
+// themselves are compiled directly from the production sources.
+sourceSets {
+    coreTest {
+        compileClasspath = files(configurations.compileClasspath.filter { it.name.startsWith('fastutil-') })
+        runtimeClasspath = output + compileClasspath
+    }
+}
+tasks.named('compileCoreTestJava', JavaCompile) {
+    source files(['EntityLevels', 'PointGrid', 'SpatialBounds', 'ClusterPartition', 'Grid', 'Partition', 'SkeinPool'].collect {
+        "src/main/java/com/theproknightgamer/skein/core/${it}.java"
+    })
+}
+def coreTest = tasks.register('coreTest', JavaExec) {
+    group = 'verification'
+    description = 'Check spatial partitions and nested worker barriers against reference results.'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    jvmArgs '-ea'
+    timeout = java.time.Duration.ofSeconds(60)
+}
+tasks.named('check') { dependsOn coreTest }
+tasks.register('coreBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Measure scheduling algorithms (microbenchmarks, not server tick rates).'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    args '--benchmark'
+    jvmArgs '-Xms512m', '-Xmx512m'
+}
+tasks.register('sourceArchive', Zip) {
+    group = 'build'
+    description = 'Package shareable source without local worlds, logs, caches, or machine-specific launch files.'
+    archiveClassifier = 'sources'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(projectDir) {
+        include 'src/**', 'docs/**', 'gradle/**', 'gradlew', 'gradlew.bat'
+        include 'README.md', 'LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties', '.gitignore'
+    }
+}
+
+// Empty stand-ins for the few classes of other mods that a compatibility mixin
+// names as a return type. Compiled against, never packaged: the real classes
+// come from the mods themselves, and those mixins only load when they do.
+sourceSets {
+    compatStubs
+}
+dependencies {
+    compileOnly sourceSets.compatStubs.output
+}

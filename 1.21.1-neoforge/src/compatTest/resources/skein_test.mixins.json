@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.theproknightgamer.skein.compat.mixin",
+  "plugin": "com.theproknightgamer.skein.compat.ConflictPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "priority": 2000,
+  "mixins": [
+    "ChunkMapInvoker",
+    "ChunkScanProbeMixin",
+    "ConflictChunkMapMixin",
+    "ConflictLoopMixin",
+    "ConflictPacketMixin",
+    "ConflictTrackingMixin",
+    "DemotionCactusMixin",
+    "DemotionFurnaceMixin",
+    "DemotionProbeMixin",
+    "SectionLevelMixin",
+    "SectionServerMixin",
+    "TimedChunkCacheMixin",
+    "TimedChunkMapMixin",
+    "TimedEntityTickerMixin",
+    "TimedServerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

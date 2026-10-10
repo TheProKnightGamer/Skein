@@ -1,0 +1,6 @@
+# Installed dedicated servers, downloaded installers and per-leg scratch output.
+# Only the harness code, README and results/ are meant to be shared.
+servers/
+cache/
+work/
+__pycache__/

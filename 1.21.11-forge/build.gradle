@@ -1,0 +1,138 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[7.0.29,8)'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+    // Named explicitly: the magic flag picks the last source set (coreTest).
+    // Applied to the compile classpath here
+    // and by Forge at runtime.
+    accessTransformers = files('src/main/resources/META-INF/accesstransformer.cfg')
+
+    runs {
+        configureEach {
+            workingDir = layout.projectDirectory.dir('run')
+            // Mixin reads the config from the jar manifest in production; the
+            // dev run has no jar, so it is named here.
+            args "--mixin.config=${mod_id}.mixins.json"
+            // Mixin's own audit output is the fastest way to see that an
+            // injector silently failed to apply.
+            systemProperty 'mixin.debug.export', 'true'
+        }
+        // Skein is a server-side mod; the client run exists only to prove that
+        // loading it on an integrated server does not explode.
+        register('client')
+        register('server') {
+            args '--nogui'
+        }
+    }
+}
+
+repositories {
+    minecraft.mavenizer(it)
+    maven fg.forgeMaven
+    maven fg.minecraftLibsMaven
+    mavenCentral()
+}
+
+dependencies {
+    implementation minecraft.dependency("net.minecraftforge:forge:${minecraft_version}-${forge_version}")
+    // Forge 61 ships MixinExtras itself (mixinextras-forge 0.5.4), so unlike
+    // the 1.21.1 build nothing is bundled.
+    compileOnly "io.github.llamalad7:mixinextras-common:${mixinextras_version}"
+    annotationProcessor 'net.minecraftforge:eventbus-validator:7.0.5'
+}
+
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+
+// mod_dev standard: [modname]-[mod version]-[mcversion]-[launcher].jar
+tasks.named('jar', Jar) {
+    archiveFileName = "${mod_id}-${mod_version}-${minecraft_version}-forge.jar"
+    from('LICENSE') { rename { "LICENSE_${mod_id}" } }
+    manifest {
+        // Everything this mod does happens in mixins; Forge finds the config here.
+        attributes['MixinConfigs'] = "${mod_id}.mixins.json"
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// Exercise the scheduling algorithms without booting Minecraft. Tiny test-only
+// stand-ins supply entity positions, buffers and worker threads; the algorithms
+// themselves are compiled directly from the production sources.
+sourceSets {
+    coreTest {
+        compileClasspath = configurations.compileClasspath.filter { it.name.startsWith('fastutil-') }
+        runtimeClasspath = output + compileClasspath
+    }
+}
+tasks.named('compileCoreTestJava', JavaCompile) {
+    source files(['EntityLevels', 'PointGrid', 'SpatialBounds', 'ClusterPartition', 'Grid', 'Partition', 'SkeinPool'].collect {
+        "src/main/java/com/theproknightgamer/skein/core/${it}.java"
+    })
+}
+def coreTest = tasks.register('coreTest', JavaExec) {
+    group = 'verification'
+    description = 'Check spatial partitions and nested worker barriers against reference results.'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    jvmArgs '-ea'
+    timeout = java.time.Duration.ofSeconds(60)
+}
+tasks.named('check') { dependsOn coreTest }
+tasks.register('sourceArchive', Zip) {
+    group = 'build'
+    description = 'Package shareable source without local worlds, logs, caches, or machine-specific launch files.'
+    archiveClassifier = 'sources'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(projectDir) {
+        include 'src/**', 'docs/**', 'gradle/**', 'gradlew', 'gradlew.bat'
+        include 'README.md', 'LICENSE', 'build.gradle', 'settings.gradle', 'gradle.properties', '.gitignore'
+    }
+}
+tasks.register('coreBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Measure scheduling algorithms (microbenchmarks, not server tick rates).'
+    classpath = sourceSets.coreTest.runtimeClasspath
+    mainClass = 'com.theproknightgamer.skein.core.CoreVerification'
+    args '--benchmark'
+    jvmArgs '-Xms512m', '-Xmx512m'
+}
+
+idea {
+    module {
+        downloadSources = true
+    }
+}

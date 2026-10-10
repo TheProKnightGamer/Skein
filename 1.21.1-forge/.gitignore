@@ -1,0 +1,12 @@
+# Local build output, test worlds, logs, and IDE launchers contain machine paths.
+/.gradle/
+/build/
+/bin/
+/run/
+/logs/
+/.eclipse/
+/.vscode/
+/.agents/
+/.codex/
+*.jfr
+*.hprof

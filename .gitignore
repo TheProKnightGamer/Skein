@@ -1,0 +1,27 @@
+# Build output, Gradle caches, dev runs and IDE files: regenerated, and full of machine paths.
+build/
+.gradle/
+run/
+bin/
+logs/
+.eclipse/
+.vscode/
+.idea/
+.agents/
+.codex/
+*.jfr
+*.hprof
+__pycache__/
+
+# Built jars live in build/libs; only the Gradle wrapper's jar is source.
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# Old source tarballs and jars, kept on disk.
+/backups/
+
+# The harness's installed servers, download cache and per-run scratch.
+/bench/servers/
+/bench/cache/
+/bench/work/

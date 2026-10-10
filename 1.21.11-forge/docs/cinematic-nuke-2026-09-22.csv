@@ -1,0 +1,6 @@
+sample,explosion_tick_ms,explosion_gc_ms,flight_tick_median_ms
+1,5192.441,31,17.009
+2,5442.967,12,19.76
+optimized-1,4129.167,13,17.028
+optimized-2,3865.179,33,19.082
+optimized-3,3894.22,21,16.415

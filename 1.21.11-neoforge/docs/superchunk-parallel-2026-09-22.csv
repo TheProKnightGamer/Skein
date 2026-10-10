@@ -1,0 +1,9 @@
+workload,variant,repetition,samples,mean_ms,median_ms,p95_ms,explosion_frame,detonations,tick_threads_cpu_ms,cpu_cores
+bubble,before,1,400,41.1132312925,36.8570405,64.409314,,,,
+bubble,after,1,400,2.4693829575,2.4477849999999997,3.006952,,,,
+bubble,after,2,400,2.1859777975,2.159916,2.711639,,,,
+bubble,before,2,400,33.2255690125,31.195946,47.256036,,,,
+cinematic,before,1,1,5611.708,,,80,5875,5628.391,1.003
+cinematic,after,1,1,3335.703,,,80,5875,6699.743,2.008
+cinematic,after,2,1,3174.139,,,80,5875,6721.978,2.118
+cinematic,before,2,1,5839.872,,,80,5875,5844.430,1.001

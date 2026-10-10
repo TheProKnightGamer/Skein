@@ -1,0 +1,10 @@
+baseline 1.21.1-neoforge (1.21.1-neoforge-baseline)  vs  port 1.21.11-forge (1.21.11-forge-port)
+
+scenario     base x   port x   ratio  port A ms  port B ms  verdict
+entities       1.61     2.08    1.29      12.38       5.95  ok
+hoppers        0.99     1.07    1.08       1.34       1.25  ok
+random         2.25     2.53    1.13       6.24       2.46  ok
+mixed          2.18     3.32    1.52      28.04       8.44  ok
+quiet          1.16     0.98    0.84       1.88       1.92  FAIL: speedup 0.84x of baseline (< 0.95)
+
+REJECTED
