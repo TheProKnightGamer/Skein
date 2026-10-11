@@ -9,7 +9,7 @@ displayName = "${mod_name}"
 authors = "${mod_authors}"
 description = '''${mod_description}'''
 logoFile = "skein_logo.png"
-logoBlur = false
+logoBlur = true
 # Server-side only: no packets, no client code. Clients join a Skein server
 # without it, and a singleplayer world gets it through the integrated server.
 displayTest = "IGNORE_ALL_VERSION"

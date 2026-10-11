@@ -1,6 +1,6 @@
 modLoader = "javafml"
 loaderVersion = "[4,)"
-license = "MIT"
+license = "All Rights Reserved"
 [[mods]]
 modId = "skein_speedee_test"
 version = "1"

@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Multithreaded server ticking for Minecraft</b><br>
-  Forge and NeoForge &middot; 1.20.1, 1.21.1, 1.21.11 and 26.2 &middot; server-side only &middot; MIT
+  Forge and NeoForge &middot; 1.20.1, 1.21.1, 1.21.11 and 26.2 &middot; server-side only &middot; all rights reserved
 </p>
 
 ---
@@ -189,4 +189,4 @@ runs a CurseForge modpack with and without Skein and compares the error logs. Se
 
 ## License
 
-[MIT](LICENSE). Made by TheProKnightGamer.
+All rights reserved ([LICENSE](LICENSE)). Made by TheProKnightGamer.

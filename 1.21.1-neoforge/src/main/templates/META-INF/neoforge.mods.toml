@@ -9,7 +9,7 @@ displayName = "${mod_name}"
 authors = "${mod_authors}"
 description = '''${mod_description}'''
 logoFile = "skein_logo.png"
-logoBlur = false
+logoBlur = true
 # Server-side only: no packets, no client code. NeoForge has no displayTest
 # (FML never reads one); it lets a client without Skein join because Skein
 # registers no network payloads. Singleplayer gets it through the integrated

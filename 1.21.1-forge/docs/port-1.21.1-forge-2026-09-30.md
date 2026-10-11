@@ -45,7 +45,7 @@ Hooks that do not exist on Forge, found by the first boot (see below) and remove
 
 Metadata: `mods.toml` with `displayTest = "IGNORE_ALL_VERSION"` (vanilla clients and clients without
 Skein can join; Skein registers no network channel), `logoFile = "skein_logo.png"`, `logoBlur = false`,
-MIT licence as `LICENSE_skein`.
+licence as `LICENSE_skein`.
 
 ### Forge-only state on the hooked tick paths
 
