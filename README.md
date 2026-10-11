@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/skein-avatar-512.png" width="144" alt="Skein logo: a pixel-art skein of yarn">
+  <img src="assets/skein.png" width="180" alt="Skein logo: a creeper wrapped in stacked layers">
 </p>
 
 <h1 align="center">Skein</h1>
