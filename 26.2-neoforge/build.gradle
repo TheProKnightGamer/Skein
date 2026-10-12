@@ -192,6 +192,14 @@ if (providers.gradleProperty('speedeeTestJar').isPresent()) {
                 if (providers.gradleProperty('benchmarkSamples').isPresent()) systemProperty 'skein.test.samples', providers.gradleProperty('benchmarkSamples').get()
                 systemProperty 'skein.test.superchunk', providers.gradleProperty('superchunkTest').isPresent().toString()
                 systemProperty 'skein.test.demotion', providers.gradleProperty('demotionTest').isPresent().toString()
+                systemProperty 'skein.test.redstoneParity', providers.gradleProperty('redstoneParity').isPresent().toString()
+                systemProperty 'skein.test.redstoneParity.seed', providers.gradleProperty('paritySeed').getOrElse('7')
+                systemProperty 'skein.test.redstoneParity.ticks', providers.gradleProperty('parityTicks').getOrElse('600')
+                systemProperty 'skein.test.redstoneParity.dump', providers.gradleProperty('parityDump').getOrElse('')
+                systemProperty 'skein.test.redstoneParity.kit', providers.gradleProperty('parityKit').getOrElse('basic')
+                systemProperty 'skein.debug.scheduledStops', providers.gradleProperty('parityStops').isPresent().toString()
+                systemProperty 'skein.test.beOrderBench', providers.gradleProperty('beOrderBench').isPresent().toString()
+                systemProperty 'skein.test.beOrderBench.ticks', providers.gradleProperty('beOrderTicks').getOrElse('3000')
                 systemProperty 'skein.test.expectSerialBenchmark', providers.gradleProperty('expectSerialBenchmark').isPresent().toString()
                 if (benchmarkSkeinJar != null) systemProperty 'skein.test.jar', file(benchmarkSkeinJar).absolutePath
             }
@@ -210,6 +218,7 @@ generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":
 view-distance=2
 simulation-distance=2
 max-tick-time=60000
+pause-when-empty-seconds=0
 ''' + "level-name=world-${System.currentTimeMillis()}\n"
             if (clientWorldTemplate != null) {
                 // The client ran render distance 32 and simulation distance 20.

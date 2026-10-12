@@ -4,15 +4,13 @@ import com.theproknightgamer.skein.Skein;
 import com.theproknightgamer.skein.SkeinConfig;
 import net.minecraft.CrashReport;
 import net.minecraft.ReportedException;
-import net.minecraft.Util;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.profiling.InactiveProfiler;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.ticks.ScheduledTick;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 /**
@@ -35,15 +33,27 @@ import java.util.function.BiConsumer;
  * run arbitrary commands -- cannot be placed in any component honestly. Rather
  * than pin them and reorder them against everything else, their presence makes
  * the whole container fall back to vanilla for that tick.
+ *
+ * <p>Groups that never meet still share the level's queues -- block events,
+ * the entity list, the sub-tick counter -- and those are put back in vanilla's
+ * order by {@link OrderedGroups}, which also lets a group that parks something
+ * the rest of it could have seen be finished in order on this thread. Ticks
+ * scheduled here are numbered as they are applied, so they get vanilla's
+ * numbers too.
  */
 @SuppressWarnings({"rawtypes", "unchecked"})
 public final class ScheduledTickTicker {
     private ScheduledTickTicker() {}
 
-    /** Largest component first so the longest task starts earliest; sub-tick order breaks ties. */
-    private static final Comparator<ClusterPartition.Group<ScheduledTick<?>>> LONGEST_FIRST =
-            Comparator.<ClusterPartition.Group<ScheduledTick<?>>>comparingInt(g -> -g.items().size())
-                    .thenComparingLong(g -> g.items().get(0).subTickOrder());
+    /** Whether the parallel path is permitted at all -- config, conflicts, the profiler. */
+    public static boolean eligible(ServerLevel level) {
+        return Skein.pool() != null
+                && SkeinConfig.Live.enabled
+                && SkeinConfig.Live.scheduledTicks
+                && SkeinCompat.allows(TickMetrics.Phase.SCHEDULED_TICKS)
+                && !DimensionTicker.isQuarantined(level)
+                && level.getServer().getProfiler() instanceof InactiveProfiler;
+    }
 
     /**
      * @return true when the ticks were run here, false to leave {@code toRun}
@@ -56,13 +66,7 @@ public final class ScheduledTickTicker {
                               BiConsumer ticker,
                               ClusterPartition<ScheduledTick<?>> partition) {
         SkeinPool pool = Skein.pool();
-        if (pool == null
-                || !SkeinConfig.Live.enabled
-                || !SkeinConfig.Live.scheduledTicks
-                || !SkeinCompat.allows(TickMetrics.Phase.SCHEDULED_TICKS)
-                || DimensionTicker.isQuarantined(level)
-                || toRun.size() < SkeinConfig.Live.minScheduledTicks
-                || !(level.getServer().getProfiler() instanceof InactiveProfiler)) {
+        if (!eligible(level) || toRun.size() < SkeinConfig.Live.minScheduledTicks) {
             return false;
         }
 
@@ -76,7 +80,7 @@ public final class ScheduledTickTicker {
                 partition.release();
                 return false;
             }
-            partition.add(tick, tick.pos().getX(), tick.pos().getZ());
+            partition.add(tick, tick.pos().getX(), tick.pos().getZ(), extraReach(tick.type()));
         }
         partition.finish();
 
@@ -87,71 +91,81 @@ public final class ScheduledTickTicker {
             partition.release();
             return false;
         }
-        groups.sort(LONGEST_FIRST);
-
         alreadyRun.addAll(toRun);
         toRun.clear();
 
-        AtomicReference<Throwable> fatal = new AtomicReference<>();
         int total = partition.size();
-
-        long wallStart = Util.getNanos();
-        pool.invokeAll(groups.size(), index -> runGroup(container, level, groups.get(index), ticker, fatal));
-        TickMetrics.recordPhaseWall(TickMetrics.Phase.SCHEDULED_TICKS, Util.getNanos() - wallStart);
-
-        int deferred = 0;
-        for (ClusterPartition.Group<ScheduledTick<?>> group : groups) {
-            deferred += group.deferred().drain(level);
+        int count = groups.size();
+        ScheduledTickScope[] scopes = new ScheduledTickScope[count];
+        for (int g = 0; g < count; g++) {
+            scopes[g] = new ScheduledTickScope(container, groups.get(g).items());
         }
 
-        TickMetrics.recordPhase(TickMetrics.Phase.SCHEDULED_TICKS, 1, groups.size(), total, 0, deferred);
-        Throwable throwable = fatal.get();
+        // A group that could reach a chunk that is not loaded runs on this
+        // thread, which may load it as vanilla would; a worker would have to
+        // cut the tick short. Its ticks run at their own places in the merge.
+        LoadedAround.beginTicks(level);
+        boolean[] pinned = new boolean[count];
+        for (int g = 0; g < count; g++) {
+            pinned[g] = !LoadedAround.test(level, groups.get(g).items(), ScheduledTick::pos,
+                    tick -> SkeinConfig.Live.borderMargin + extraReach(tick.type()));
+        }
+
+        OrderedGroups.Outcome outcome = OrderedGroups.run(level, pool, groups, pinned, total,
+                TickMetrics.Phase.SCHEDULED_TICKS, new OrderedGroups.Work<ScheduledTick<?>>() {
+                    @Override
+                    public void enter(int group) {
+                        TickContext.local().scheduledScope = scopes[group];
+                    }
+
+                    @Override
+                    public void before(int group, ScheduledTick<?> tick) {
+                        scopes[group].advance();
+                    }
+
+                    @Override
+                    public void exit(int group) {
+                        TickContext.local().scheduledScope = null;
+                    }
+
+                    @Override
+                    public void tick(ScheduledTick<?> tick) {
+                        ticker.accept(tick.pos(), tick.type());
+                    }
+
+                    @Override
+                    public net.minecraft.core.BlockPos origin(ScheduledTick<?> tick) {
+                        return tick.pos();
+                    }
+
+                    @Override
+                    public int reach(ScheduledTick<?> tick) {
+                        return SkeinConfig.Live.borderMargin;
+                    }
+
+                    @Override
+                    public void failed(ServerLevel level, ScheduledTick<?> tick, Throwable thrown) {
+                        Skein.LOGGER.error("Skein: scheduled tick for {} at {} threw in {}",
+                                tick.type(), tick.pos(), level.dimension().location(), thrown);
+                    }
+                });
+
+        TickMetrics.recordPhase(TickMetrics.Phase.SCHEDULED_TICKS, 1, count, total - outcome.serial(),
+                outcome.serial(), outcome.applied());
         partition.release();
-        if (throwable != null) {
+        if (outcome.fatal() != null) {
             throw new ReportedException(CrashReport.forThrowable(
-                    throwable, "Exception ticking scheduled tick (Skein scheduled ticks phase)"));
+                    outcome.fatal(), "Exception ticking scheduled tick (Skein scheduled ticks phase)"));
         }
         return true;
     }
 
-    private static void runGroup(Object container,
-                                 ServerLevel level,
-                                 ClusterPartition.Group<ScheduledTick<?>> group,
-                                 BiConsumer ticker,
-                                 AtomicReference<Throwable> fatal) {
-        long start = Util.getNanos();
-        List<ScheduledTick<?>> items = group.items();
-        ScheduledTickScope scope = new ScheduledTickScope(container, items);
-        TickContext.Local local = TickContext.local();
-        ScheduledTickScope previousScope = local.scheduledScope;
-        TickContext.State previous = TickContext.enter(level, true, group.deferred());
-        local.scheduledScope = scope;
-        try {
-            for (int i = 0; i < items.size(); i++) {
-                ScheduledTick<?> tick = items.get(i);
-                scope.advance();
-                try {
-                    ticker.accept(tick.pos(), tick.type());
-                } catch (Throwable t) {
-                    if (SkeinRefusal.in(t)) {
-                        TickContext.resetBrackets();
-                        SkeinRefusal.swallowed(tick.pos(), t);
-                        continue;
-                    }
-                    TickMetrics.recordFailure();
-                    if (SkeinConfig.Live.crashPolicy == SkeinConfig.CrashPolicy.RETHROW) {
-                        fatal.compareAndSet(null, t);
-                        return;
-                    }
-                    TickContext.resetBrackets();
-                    Skein.LOGGER.error("Skein: scheduled tick for {} at {} threw in {}",
-                            tick.type(), tick.pos(), level.dimension().location(), t);
-                }
-            }
-        } finally {
-            local.scheduledScope = previousScope;
-            TickContext.exit(previous);
-            TickMetrics.recordPhaseWork(TickMetrics.Phase.SCHEDULED_TICKS, Util.getNanos() - start);
-        }
+    /**
+     * How much further than the margin a tick of {@code type} reaches. A
+     * tripwire hook's tick, or a string's, finds the hook at the other end of
+     * the line up to 42 blocks away and sets it, with its neighbours updated.
+     */
+    private static int extraReach(Object type) {
+        return type == Blocks.TRIPWIRE_HOOK || type == Blocks.TRIPWIRE ? 42 : 0;
     }
 }

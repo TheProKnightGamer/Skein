@@ -7,6 +7,7 @@ import com.theproknightgamer.skein.core.HookFor;
 import com.theproknightgamer.skein.core.Hooks;
 import com.theproknightgamer.skein.core.SkeinLevel;
 import com.theproknightgamer.skein.core.SkeinTickContainer;
+import com.theproknightgamer.skein.core.OrderedGroups;
 import com.theproknightgamer.skein.core.TickContext;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -71,7 +72,7 @@ public abstract class ServerLevelMixin {
     private void skein$deferBlockEvent(BlockPos pos, Block block, int param, int data, CallbackInfo ci) {
         if (TickContext.deferring()) {
             ServerLevel self = (ServerLevel) (Object) this;
-            DeferredWork.defer(self, () -> self.blockEvent(pos.immutable(), block, param, data));
+            DeferredWork.deferOrdered(self, () -> self.blockEvent(pos.immutable(), block, param, data));
             ci.cancel();
         }
     }
@@ -108,7 +109,7 @@ public abstract class ServerLevelMixin {
         }
         ServerLevel self = (ServerLevel) (Object) this;
         BlockPos immutable = pos.immutable();
-        DeferredWork.defer(self, () -> self.sendBlockUpdated(immutable, oldState, newState, flags));
+        DeferredWork.deferOrdered(self, () -> self.sendBlockUpdated(immutable, oldState, newState, flags));
         ci.cancel();
     }
 
@@ -134,6 +135,13 @@ public abstract class ServerLevelMixin {
      * deterministic task order. Only the thread and the position within the
      * tick move -- the same trade already made for the navigation sweep above.
      * A sculk sensor observes the vibration at the barrier rather than mid-pass.
+     *
+     * <p>Except where order is exact ({@code OrderedGroups}: scheduled ticks and
+     * block entities), and a sculk sensor that hears a door before or after its
+     * own tick in vanilla must do so here. When every listener the event can
+     * reach is within the reach of the thing that fired it, which is where its
+     * own writes are, the event is heard on the spot. One that reaches further
+     * is parked, and its group finishes in vanilla order on the coordinator.
      */
     @HookFor(Hooks.Feature.IN_LEVEL)
     @Inject(method = "gameEvent", at = @At("HEAD"), cancellable = true)
@@ -143,6 +151,10 @@ public abstract class ServerLevelMixin {
             return;
         }
         ServerLevel self = (ServerLevel) (Object) this;
+        TickContext.Local local = TickContext.local();
+        if (local.level == self && OrderedGroups.within(local, pos.x, pos.z, event.getNotificationRadius())) {
+            return;
+        }
         if (DeferredWork.parkFor(self, () -> self.gameEvent(event, pos, context))) {
             ci.cancel();
         }

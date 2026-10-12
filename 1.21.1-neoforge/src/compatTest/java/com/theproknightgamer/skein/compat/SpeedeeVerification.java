@@ -84,6 +84,10 @@ public final class SpeedeeVerification {
             new PistonVerification();
             return;
         }
+        if (Boolean.getBoolean("skein.test.redstoneParity")) {
+            new RedstoneParity();
+            return;
+        }
         if (Boolean.getBoolean("skein.test.alternateCurrent")) {
             new AlternateCurrentVerification();
             return;

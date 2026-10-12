@@ -4,11 +4,13 @@ import com.theproknightgamer.skein.SkeinConfig;
 import com.theproknightgamer.skein.core.HookFor;
 import com.theproknightgamer.skein.core.Hooks;
 import com.theproknightgamer.skein.core.DeferredWork;
+import com.theproknightgamer.skein.core.ClusterPartition;
 import com.theproknightgamer.skein.core.ClusterPass;
 import com.theproknightgamer.skein.core.Partition;
 import com.theproknightgamer.skein.core.PhaseGovernor;
 import com.theproknightgamer.skein.core.SkeinLevel;
 import com.theproknightgamer.skein.core.SkeinRandom;
+import com.theproknightgamer.skein.core.SubTickOrder;
 import com.theproknightgamer.skein.core.TickContext;
 import com.theproknightgamer.skein.core.CollisionQueries;
 import com.theproknightgamer.skein.core.ProjectileQueries;
@@ -104,6 +106,9 @@ public abstract class LevelMixin implements SkeinLevel {
     private Partition<TickingBlockEntity> skein$blockEntityPartition;
 
     @Unique
+    private ClusterPartition<TickingBlockEntity> skein$blockEntityGroups;
+
+    @Unique
     private ClusterPass skein$clusterPass;
 
     @Unique
@@ -128,9 +133,11 @@ public abstract class LevelMixin implements SkeinLevel {
      * lose an increment and produce two ticks that claim the same place in the
      * sequence.
      *
-     * <p>They would be far apart and unable to interact, so nothing breaks; but
-     * "nothing breaks" is a weaker promise than the one the counter exists to
-     * make, and an atomic increment costs nothing next to scheduling a tick.
+     * <p>Inside a pass no number is drawn at all: the tick is parked with its
+     * schedule and numbered when the coordinator applies it, in vanilla's order
+     * ({@link SubTickOrder}). The counter is still atomic for whatever draws
+     * outside a pass from another thread -- a mod scheduling into this level
+     * from its own.
      */
     @Unique
     private final AtomicLong skein$subTickCount = new AtomicLong();
@@ -144,6 +151,7 @@ public abstract class LevelMixin implements SkeinLevel {
         this.skein$entityPartition = new Partition<>();
         this.skein$chunkPartition = new Partition<>();
         this.skein$blockEntityPartition = new Partition<>();
+        this.skein$blockEntityGroups = new ClusterPartition<>();
         this.skein$clusterPass = new ClusterPass();
         this.skein$governor = new PhaseGovernor();
         this.skein$chunkLoadLock = new ReentrantLock();
@@ -173,6 +181,11 @@ public abstract class LevelMixin implements SkeinLevel {
     @Override
     public Partition<TickingBlockEntity> skein$blockEntityPartition() {
         return this.skein$blockEntityPartition;
+    }
+
+    @Override
+    public ClusterPartition<TickingBlockEntity> skein$blockEntityGroups() {
+        return this.skein$blockEntityGroups;
     }
 
     @Override
@@ -226,6 +239,9 @@ public abstract class LevelMixin implements SkeinLevel {
     @HookFor(Hooks.Feature.IN_LEVEL)
     @WrapMethod(method = "nextSubTickCount")
     private long skein$nextSubTickCount(Operation<Long> original) {
+        if (TickContext.deferring()) {
+            return SubTickOrder.UNSTAMPED;
+        }
         return this.skein$subTickCount.getAndIncrement();
     }
 
@@ -297,7 +313,7 @@ public abstract class LevelMixin implements SkeinLevel {
     private void skein$deferTicker(TickingBlockEntity ticker, CallbackInfo ci) {
         if (TickContext.deferring()) {
             Level self = (Level) (Object) this;
-            DeferredWork.defer(self, () -> self.addBlockEntityTicker(ticker));
+            DeferredWork.deferOrdered(self, () -> self.addBlockEntityTicker(ticker));
             ci.cancel();
         }
     }

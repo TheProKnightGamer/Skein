@@ -91,6 +91,12 @@ public final class TickContext {
         /** The component of scheduled ticks this thread is working through, if any. */
         public ScheduledTickScope scheduledScope;
         /**
+         * The phase whose item ({@link #ticking}) this thread is running in an
+         * {@link OrderedGroups} task, or null outside one. A game event fired
+         * within that item's reach is heard on the spot, as in vanilla.
+         */
+        public OrderedGroups.Work<?> ordered;
+        /**
          * This thread's copy of the chunk cache, and counters for what it is
          * doing. Held here rather than in a {@code ThreadLocal} because
          * {@code getChunk} is the single hottest path in the mod and the

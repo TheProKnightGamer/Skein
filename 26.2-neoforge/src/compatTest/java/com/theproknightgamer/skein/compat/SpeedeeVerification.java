@@ -57,6 +57,14 @@ public final class SpeedeeVerification {
     private static boolean indexed;
 
     public SpeedeeVerification() {
+        if (Boolean.getBoolean("skein.test.redstoneParity")) {
+            new RedstoneParity();
+            return;
+        }
+        if (Boolean.getBoolean("skein.test.beOrderBench")) {
+            new BlockEntityOrderBenchmark();
+            return;
+        }
         if (Boolean.getBoolean("skein.test.demotion")) {
             new DemotionVerification();
             return;

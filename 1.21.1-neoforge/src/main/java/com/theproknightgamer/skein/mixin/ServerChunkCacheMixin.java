@@ -349,6 +349,10 @@ public abstract class ServerChunkCacheMixin {
      * drops the ticket or never finishes a lookup. Those wait for the dimension
      * barrier, which is the only point where no level is running at all.
      *
+     * <p>Nothing a tick can see depends on these writes until chunks next load
+     * and unload, so they are parked as order-only: the scheduled-tick phase
+     * keeps a group running past them.
+     *
      * @return true if the write was parked, false if the caller still has to do
      *         it
      */
@@ -357,7 +361,7 @@ public abstract class ServerChunkCacheMixin {
         if (TickContext.current() != this.level && DimensionTicker.deferPastBarrier(write)) {
             return true;
         }
-        return DeferredWork.park(write);
+        return DeferredWork.parkOrdered(write);
     }
 
     /**

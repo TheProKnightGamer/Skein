@@ -94,6 +94,14 @@ public final class Partition<T> {
         cellFor(Grid.pass((int) (cellX & 1), (int) (cellZ & 1)), key).items.add(item);
     }
 
+    /**
+     * Files one member without placing it in a cell, for a caller that will
+     * split the pile another way and place only what is left ({@link #all}).
+     */
+    public void file(T item) {
+        this.all.add(item);
+    }
+
     /** Files one member that must run on the level-owning thread whatever its position. */
     public void pin(T item) {
         this.all.add(item);

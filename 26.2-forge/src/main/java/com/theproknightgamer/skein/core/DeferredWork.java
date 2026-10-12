@@ -3,6 +3,7 @@ package com.theproknightgamer.skein.core;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.entity.EntityInLevelCallback;
+import net.minecraft.world.ticks.ScheduledTick;
 
 /**
  * The mechanism that makes parallel entity ticking tractable.
@@ -42,6 +43,41 @@ public final class DeferredWork {
     }
 
     /**
+     * As {@link #defer}, for a write that nothing later in the same task could
+     * see in vanilla either -- a block event joining the queue, a client
+     * update -- so that only its place in the order matters. The scheduled-tick
+     * phase keeps a group running past one of these; any other parked write
+     * makes it finish the group in vanilla order instead.
+     */
+    public static boolean deferOrdered(Level level, Runnable action) {
+        DeferredBuffer buffer = target();
+        if (buffer == null) {
+            action.run();
+            return false;
+        }
+        buffer.runOrdered(action);
+        return true;
+    }
+
+    /**
+     * Parks a scheduled tick bound for {@code container} if the caller is
+     * inside a parallel pass. The tick stays visible to
+     * {@code hasScheduledTick} on this thread until it is applied, as it
+     * would be in vanilla.
+     *
+     * @return true if the tick was parked, false if the caller should schedule it
+     */
+    public static boolean deferSchedule(Object container, ScheduledTick<?> tick, Runnable schedule) {
+        DeferredBuffer buffer = target();
+        if (buffer == null) {
+            return false;
+        }
+        buffer.parkTick(container, tick);
+        buffer.runOrdered(schedule);
+        return true;
+    }
+
+    /**
      * Parks {@code action} if the caller is inside a parallel pass, and does
      * nothing at all otherwise.
      *
@@ -57,6 +93,16 @@ public final class DeferredWork {
             return false;
         }
         buffer.run(action);
+        return true;
+    }
+
+    /** As {@link #park}, for a write that only has a place in the order; see {@link #deferOrdered}. */
+    public static boolean parkOrdered(Runnable action) {
+        DeferredBuffer buffer = target();
+        if (buffer == null) {
+            return false;
+        }
+        buffer.runOrdered(action);
         return true;
     }
 

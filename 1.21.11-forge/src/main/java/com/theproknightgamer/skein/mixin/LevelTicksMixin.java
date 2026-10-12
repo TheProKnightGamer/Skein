@@ -1,13 +1,19 @@
 package com.theproknightgamer.skein.mixin;
 
 import com.theproknightgamer.skein.Skein;
+import com.theproknightgamer.skein.core.TickMetrics;
+import com.theproknightgamer.skein.core.SkeinLevel;
+import com.theproknightgamer.skein.core.PhaseGovernor;
+import com.theproknightgamer.skein.SkeinConfig;
 import com.theproknightgamer.skein.core.ClusterPartition;
+import com.theproknightgamer.skein.core.DeferredBuffer;
 import com.theproknightgamer.skein.core.DeferredWork;
 import com.theproknightgamer.skein.core.HookFor;
 import com.theproknightgamer.skein.core.Hooks;
 import com.theproknightgamer.skein.core.ScheduledTickScope;
 import com.theproknightgamer.skein.core.ScheduledTickTicker;
 import com.theproknightgamer.skein.core.SkeinTickContainer;
+import com.theproknightgamer.skein.core.SubTickOrder;
 import com.theproknightgamer.skein.core.TickContext;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
@@ -103,18 +109,56 @@ public abstract class LevelTicksMixin implements SkeinTickContainer {
         }
         LevelTicks self = (LevelTicks) (Object) this;
         // Replayed on the coordinator, where deferring() is false and this
-        // injection falls straight through to the vanilla body.
-        DeferredWork.defer(level, () -> self.schedule(tick));
-        ci.cancel();
+        // injection falls straight through to the vanilla body. The tick gets
+        // its sub-tick number there, from the level it belongs to.
+        Level owner = this.skein$level != null ? this.skein$level : level;
+        if (DeferredWork.deferSchedule(self, tick, SubTickOrder.schedule(self, tick, owner))) {
+            ci.cancel();
+        }
     }
 
+    /**
+     * A tick parked on this thread is already scheduled as far as the thread
+     * can tell. Several blocks act on the answer -- a target block hit twice
+     * in one tick keeps the first hit's power only because the second sees the
+     * first one's tick, and observers and pointed dripstone branch on it -- so
+     * it has to be the one vanilla gives.
+     */
+    @WrapMethod(method = "hasScheduledTick")
+    private boolean skein$hasScheduledTick(BlockPos pos, Object type, Operation<Boolean> original) {
+        if (TickContext.deferring()) {
+            DeferredBuffer buffer = TickContext.buffer();
+            if (buffer != null && buffer.hasParkedTick(this, pos, type)) {
+                return true;
+            }
+        }
+        return original.call(pos, type);
+    }
+
+    /**
+     * Timed both ways like every other phase, so that a level whose ticks do
+     * not pay for a barrier runs them vanilla's way. Either way the result is
+     * the same, tick for tick; only the time differs. Only ticks big enough
+     * to go parallel are timed at all, so a level's handful of quiet ticks does
+     * not decide for the busy ones.
+     */
     @HookFor(Hooks.Feature.SCHEDULED_TICKS)
     @WrapMethod(method = "runCollectedTicks")
     private void skein$runCollectedTicks(BiConsumer ticker, Operation<Void> original) {
-        if (this.skein$level == null
-                || !ScheduledTickTicker.run(this, this.skein$level, this.toRunThisTick,
-                        this.alreadyRunThisTick, ticker, this.skein$partition)) {
+        ServerLevel level = this.skein$level;
+        if (level == null || this.toRunThisTick.size() < SkeinConfig.Live.minScheduledTicks) {
             original.call(ticker);
+            return;
+        }
+        PhaseGovernor governor = ((SkeinLevel) level).skein$governor();
+        boolean parallel = governor.begin(TickMetrics.Phase.SCHEDULED_TICKS, ScheduledTickTicker.eligible(level));
+        try {
+            if (!parallel || !ScheduledTickTicker.run(this, level, this.toRunThisTick,
+                    this.alreadyRunThisTick, ticker, this.skein$partition)) {
+                original.call(ticker);
+            }
+        } finally {
+            governor.finish(TickMetrics.Phase.SCHEDULED_TICKS);
         }
     }
 

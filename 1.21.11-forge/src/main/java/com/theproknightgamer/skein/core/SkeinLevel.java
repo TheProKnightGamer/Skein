@@ -29,6 +29,9 @@ public interface SkeinLevel {
 
     Partition<TickingBlockEntity> skein$blockEntityPartition();
 
+    /** Block entities grouped by what they can reach, for ticking them in vanilla's order. */
+    ClusterPartition<TickingBlockEntity> skein$blockEntityGroups();
+
     /**
      * The cluster tier's reusable state -- the conflict graph's arrays and its
      * slice buffers. Kept per level for the same reason the partitions are:

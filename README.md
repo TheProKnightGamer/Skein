@@ -25,6 +25,10 @@ exactly where vanilla ends it. Players joining a server running Skein don't need
   inside a safety margin, so cells that run together never touch the same blocks. Four offset grids
   mean no position sits on an edge. Mobs that reach further than the margin, like villagers, get
   their own coarser passes instead of falling back to the main thread (1.21.1 NeoForge so far).
+- **Redstone in parallel, in vanilla's exact order.** Scheduled ticks (repeaters, comparators,
+  observers, fluids, falling blocks) run in groups of what can affect each other, each in vanilla's
+  order, and what the groups share is put back in vanilla's order too, down to the sub-tick numbers
+  of new ticks. A fuzzer checks it tick for tick against vanilla.
 - **A cluster tier for dense farms.** Thousands of items, XP orbs or snowballs piled into one spot
   are ordered by what they can actually reach, rather than by where they are.
 - **It knows when not to bother.** Every phase is timed both ways, and a phase that doesn't pay
@@ -40,7 +44,7 @@ Each folder is a complete project for one Minecraft version and loader. They sha
 features, commands and config keys, so a server can change version or loader and keep its config.
 New work lands in one folder first and is ported to the rest: the October 2026 scheduling round
 and the Alternate Current, Create belt and SuperChunk fixes are in `1.21.1-neoforge` so far, and the
-TNT-cannon work is in all eight.
+TNT-cannon work and vanilla-order redstone are in all eight.
 
 | Folder | Minecraft | Loader | Java |
 |---|---|---|---|
@@ -88,6 +92,11 @@ source builds all of it at 54 ms/tick, and its biggest pushes went from 1.2 seco
 
 Skein is built around not changing what the game does, only when it happens:
 
+- redstone run in parallel (`scheduledTicks`) matches vanilla tick for tick, with
+  block entities ordered as well: a fuzzer builds 48 random circuits (pistons, observers, comparators, falling
+  sand, minecarts on detector rails, pressure plates, tripwire, sculk sensors, hoppers, water) and compares
+  every block, entity and pending tick, in order, with vanilla for 600 ticks, over six seeds and 2 to 16
+  threads ([how](26.2-neoforge/docs/redstone-parity-2026-10-11.md))
 - items moved through 121 hopper rings are counted before and after: 7,744 in, 7,744 out, in every configuration
 - nine sealed water and lava basins stepped 400 ticks give byte-identical results, serial and parallel
 - a TNT cannon's 5,070-TNT payload ends in exactly vanilla's positions and fuses
@@ -96,9 +105,13 @@ Skein is built around not changing what the game does, only when it happens:
   sequences, points of interest, captured drops) is made thread-safe or deferred to the barrier
 - a type that throws or hangs while ticking in parallel is moved back to the main thread, and remembered
 
-What does change is the *order* of work within a single tick (vanilla's is insertion order and a
-shuffle; Skein's is deterministic but different), and a few reactions arrive one pass later in the
-same tick. Nothing that depends on sub-tick ordering between far-apart machines should notice.
+Scheduled ticks (redstone, fluids, falling blocks) keep vanilla's order exactly, and what they share
+-- block events, new entities, the sub-tick numbers of new ticks -- is put back in vanilla's order too.
+Block entities can do the same (`blockEntities.vanillaOrderLimit`); it is off by default because a
+dense contraption such as a TNT cannon is then one group on one thread. Elsewhere the *order* of work
+within a single tick can change (for entities and random ticks vanilla's is insertion order and a shuffle; Skein's is
+deterministic but different), and a few reactions arrive one pass later in the same tick. Random
+draws and entity ids are not vanilla's either, but vanilla does not reproduce those between runs.
 
 ## Compatibility
 
@@ -148,7 +161,11 @@ modded machine misbehaves, add its block entity to `blockEntities.blacklist`, or
 
 [blockEntities]
     enabled = true
+    vanillaOrderLimit = 0      # 512: neighbours that can affect each other tick in vanilla's order
     blacklist = ["minecraft:beacon", "minecraft:conduit", "minecraft:bell", "minecraft:end_gateway"]
+
+[scheduledTicks]
+    enabled = true             # redstone, fluids and falling blocks in parallel, in vanilla's order
 ```
 
 If something looks wrong, turn phases off in this order: `blockEntities`, `entities`, `randomTicks`, `dimensions`.

@@ -55,6 +55,9 @@ def main() -> int:
     ap.add_argument("--step", type=int, help="instead of running in real time, step exactly this many ticks "
                     "(deterministic: compare end states between builds)")
     ap.add_argument("--dump-tnt", action="store_true", help="record every primed TNT's position and fuse at the end")
+    ap.add_argument("--decoy", action="store_true", help="run an observer clock 400 blocks away, so the cannon is one "
+                    "component of several and Skein's parallel scheduled-tick path (not vanilla's) runs it. Two vanilla "
+                    "runs with it differ from each other (the loaders' chunk timing shifts), so it is no use for parity")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
@@ -125,6 +128,13 @@ def main() -> int:
             m = re.search(r"count: (\d+)", cmd("execute if entity @e[type=minecraft:tnt]"), re.I)
             return int(m.group(1)) if m else 0
 
+        if args.decoy:
+            cmd("forceload add 1248 832")
+            step(20)
+            cmd("setblock 1248 200 832 minecraft:stone")
+            cmd("setblock 1249 200 832 minecraft:stone")
+            cmd("setblock 1248 201 832 minecraft:observer[facing=east]")
+            cmd("setblock 1249 201 832 minecraft:observer[facing=west]")
         for cx, cz in LOADERS:
             cmd(f"forceload add {cx * 16} {cz * 16}")
         step(40)

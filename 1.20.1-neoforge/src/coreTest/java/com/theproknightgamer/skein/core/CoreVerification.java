@@ -25,6 +25,7 @@ public final class CoreVerification {
         spatialBounds();
         pointGrid();
         clusterPartition();
+        clusterPartitionLinks();
         gridPartition();
         pool();
         System.out.println("Core verification passed: entity precedence, point queries, component ordering, grid safety, nested barriers.");
@@ -285,6 +286,89 @@ public final class CoreVerification {
         }
         partition.finish();
         check(partition.groups().size() == 4, "truncated keys or overflowing neighbour gaps merged distant buckets");
+        partition.release();
+    }
+
+    /**
+     * Work filed with links of its own: joined at the mean of the two, never
+     * further apart than a pair that could reach each other, and in the same
+     * components as a quadratic reference over the same bucket boxes.
+     */
+    private static void clusterPartitionLinks() {
+        Random random = new Random(4417);
+        ClusterPartition<Integer> partition = new ClusterPartition<>();
+        for (int trial = 0; trial < 400; trial++) {
+            int count = random.nextInt(160), link = 2 + random.nextInt(100);
+            int[] x = new int[count], z = new int[count], span = new int[count];
+            int[] parent = new int[count];
+            partition.begin(link);
+            for (int i = 0; i < count; i++) {
+                x[i] = random.nextInt(800) - 400;
+                z[i] = random.nextInt(800) - 400;
+                span[i] = random.nextInt(link + 1);
+                parent[i] = i;
+                partition.addLinking(i, x[i], z[i], span[i]);
+            }
+            int[] minX = x.clone(), maxX = x.clone(), minZ = z.clone(), maxZ = z.clone();
+            int[] widest = span.clone();
+            for (int i = 0; i < count; i++) {
+                for (int j = 0; j < count; j++) {
+                    if (sameBucket(x, z, link, i, j)) {
+                        minX[i] = Math.min(minX[i], x[j]); maxX[i] = Math.max(maxX[i], x[j]);
+                        minZ[i] = Math.min(minZ[i], z[j]); maxZ[i] = Math.max(maxZ[i], z[j]);
+                        widest[i] = Math.max(widest[i], span[j]);
+                    }
+                }
+            }
+            for (int i = 0; i < count; i++) {
+                for (int j = 0; j < count; j++) {
+                    long joined = (long) widest[i] + widest[j];
+                    if (2L * Math.max(0, Math.max(minX[j] - maxX[i], minX[i] - maxX[j])) <= joined
+                            && 2L * Math.max(0, Math.max(minZ[j] - maxZ[i], minZ[i] - maxZ[j])) <= joined) {
+                        parent[root(parent, j)] = root(parent, i);
+                    }
+                }
+            }
+            partition.finish();
+            int[] groupOf = new int[count];
+            Arrays.fill(groupOf, -1);
+            for (int g = 0; g < partition.groups().size(); g++) {
+                int previous = -1;
+                ClusterPartition.Group<Integer> group = partition.groups().get(g);
+                for (int k = 0; k < group.items().size(); k++) {
+                    int item = group.items().get(k);
+                    check(item > previous && groupOf[item] == -1, "linked component order/duplicate");
+                    check(group.ranks().getInt(k) == item, "rank is not the filing order");
+                    previous = item;
+                    groupOf[item] = g;
+                }
+            }
+            for (int i = 0; i < count; i++) {
+                check(groupOf[i] >= 0, "missing linked item");
+                for (int j = 0; j < count; j++) {
+                    check((groupOf[i] == groupOf[j]) == (root(parent, i) == root(parent, j)), "linked component mismatch");
+                    long reach = (long) span[i] + span[j];
+                    if (2L * Math.abs(x[i] - x[j]) <= reach && 2L * Math.abs(z[i] - z[j]) <= reach) {
+                        check(groupOf[i] == groupOf[j], "a pair within its own link was split");
+                    }
+                }
+            }
+            partition.release();
+        }
+        // A long reach is filed as points that far out, joined to the work.
+        partition.begin(80);
+        partition.add(0, 0, 0);
+        partition.add(1, 120, 0);
+        partition.finish();
+        check(partition.groups().size() == 2, "work 120 apart joined at a link of 80");
+        partition.release();
+        partition.begin(80);
+        partition.add(0, 0, 0, 42);
+        partition.add(1, 120, 0);
+        partition.add(2, 0, -300);
+        partition.finish();
+        check(partition.groups().size() == 2, "a 42-block reach did not join work 78 past it");
+        check(partition.groups().get(0).items().equals(List.of(0, 1)), "reach joined the wrong work");
         partition.release();
     }
 

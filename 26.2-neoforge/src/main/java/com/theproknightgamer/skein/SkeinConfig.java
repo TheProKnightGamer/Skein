@@ -118,6 +118,7 @@ public final class SkeinConfig {
 
     private static final ModConfigSpec.BooleanValue BLOCK_ENTITIES_ENABLED;
     private static final ModConfigSpec.IntValue BLOCK_ENTITY_MIN_COUNT;
+    private static final ModConfigSpec.IntValue BLOCK_ENTITY_ORDER_LIMIT;
     private static final ModConfigSpec.ConfigValue<List<? extends String>> BLOCK_ENTITY_BLACKLIST;
     private static final ModConfigSpec.BooleanValue SAVING_ENABLED;
     private static final ModConfigSpec.IntValue SAVING_MIN_CHUNKS;
@@ -392,13 +393,13 @@ public final class SkeinConfig {
                         "Parallelism therefore depends on how spread out the world's redstone and",
                         "fluids are. One spreading lake is one component and runs exactly as vanilla",
                         "runs it; forty separate farms are forty components.",
-                        "OFF BY DEFAULT. The component split is exactly order-preserving on paper and",
-                        "reproduces vanilla's fluid interactions block for block in testing, but it",
-                        "has been reported to hang a world containing 0-tick redstone and that is not",
-                        "understood yet. Turn it on only if you are willing to be the one who finds",
-                        "out; a stalled phase logs every worker's stack trace after ten seconds.")
+                        "What groups share -- block events, new entities, new ticks' sub-tick numbers --",
+                        "is put back in vanilla's order, so the result matches vanilla tick for tick:",
+                        "every block, entity and pending tick, in order (docs/redstone-parity-2026-10-11.md).",
+                        "Like the other phases it is timed both ways and runs vanilla's loop when that is",
+                        "cheaper. A stalled phase logs every worker's stack trace after ten seconds.")
                 .push("scheduledTicks");
-        SCHEDULED_TICKS_ENABLED = builder.define("enabled", false);
+        SCHEDULED_TICKS_ENABLED = builder.define("enabled", true);
         SCHEDULED_TICK_MIN_COUNT = builder
                 .comment("Do not bother going parallel below this many ticks collected for one tick.")
                 .defineInRange("minTicks", 64, 0, 1000000);
@@ -422,6 +423,14 @@ public final class SkeinConfig {
         BLOCK_ENTITY_MIN_COUNT = builder
                 .comment("Do not bother going parallel below this many ticking block entities in a level.")
                 .defineInRange("minTickers", 64, 0, 100000);
+        BLOCK_ENTITY_ORDER_LIMIT = builder
+                .comment("Above 0, block entities close enough to affect each other tick in vanilla's order, in",
+                        "groups that run side by side: a hopper and the hoppers it feeds, a piston and what it",
+                        "moves. A group bigger than this is split by the grid instead. 0, the default, uses the",
+                        "grid everywhere, which can tick two neighbours in the other order but keeps dense",
+                        "builds parallel: a TNT cannon's moving pistons are all within reach of each other, so in",
+                        "vanilla's order they tick as one group, on one thread. 512 orders all but the densest.")
+                .defineInRange("vanillaOrderLimit", 0, 0, 1000000);
         BLOCK_ENTITY_BLACKLIST = builder
                 .comment("Block entity type IDs that always tick serially. The defaults are the vanilla",
                         "types whose tick reaches further than any sane margin: beacons and conduits",
@@ -462,7 +471,7 @@ public final class SkeinConfig {
         public static volatile boolean blockEntities = true;
         public static volatile boolean parallelSaving = false;
         public static volatile int minSaveChunks = 256;
-        public static volatile boolean scheduledTicks = false;
+        public static volatile boolean scheduledTicks = true;
         public static volatile int minScheduledTicks = 64;
         /**
          * Whether the explosion hooks are running at all -- the parallel rays
@@ -478,6 +487,7 @@ public final class SkeinConfig {
         public static volatile int minEntities = 100;
         public static volatile int minRandomTickChunks = 16;
         public static volatile int minBlockEntities = 64;
+        public static volatile int blockEntityOrderLimit = 0;
         public static volatile boolean adaptive = true;
         public static volatile boolean pinPlayers = true;
         public static volatile int loadedMarginChunks = 3;
@@ -640,6 +650,7 @@ public final class SkeinConfig {
         Live.exactProjectileIsolation = ENTITY_CLUSTER_EXACT_PROJECTILES.get();
         Live.minRandomTickChunks = RANDOM_TICK_MIN_CHUNKS.get();
         Live.minBlockEntities = BLOCK_ENTITY_MIN_COUNT.get();
+        Live.blockEntityOrderLimit = BLOCK_ENTITY_ORDER_LIMIT.get();
         Live.pinPlayers = ENTITY_PIN_PLAYERS.get();
         Live.loadedMarginChunks = ENTITY_LOADED_MARGIN.get();
         Live.threadCount = THREAD_COUNT.get();

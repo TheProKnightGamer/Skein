@@ -3,9 +3,9 @@
 By **TheProKnightGamer**.
 
 Ticks Minecraft's dimensions on separate threads, and the work inside a
-dimension -- random ticks, entities, block entities -- across separate spatial
-regions. **NeoForge 1.20.1** (47.1.x) build, server-side; the same source ships
-as a Forge 1.20.1 (47.4+) build. All four phases are on by default.
+dimension -- redstone and fluids, random ticks, entities, block entities --
+across separate spatial regions. **NeoForge 1.20.1** (47.1.x) build, server-side; the same source ships
+as a Forge 1.20.1 (47.4+) build. All five phases are on by default.
 
 > **This build.** Skein was written against NeoForge 1.21.1 and ported to
 > 1.20.1 with the same config file (`config/skein-common.toml`, same keys), the
@@ -106,7 +106,7 @@ config raises the cell size to meet the margin rather than quietly pushing work
 back into the serial set. Raising the margin costs cell size -- and therefore
 the number of cells -- rather than costing coverage.
 
-### Scheduled ticks (off by default)
+### Scheduled ticks
 
 Redstone, fluid flow, falling blocks, crops on a timer. This is the one phase
 where order is the whole point, so it does not use the grid: a scheduled tick
@@ -137,6 +137,24 @@ the world is rather than on how much work there is. One spreading lake is one
 component and runs exactly as vanilla runs it. Forty separate farms are forty
 components.
 
+Groups that never meet still share the level's queues -- the block-event
+queue, the entity list, the sub-tick counter every new tick is stamped with --
+and filling those in thread order was the one place this phase still differed
+from vanilla. Every write a group parks carries the rank of the tick that made
+it, its place in vanilla's run order, and the coordinator applies the groups'
+writes merged by rank, so the queues end up exactly as vanilla leaves them. A
+tick scheduled inside the pass is numbered as its write is applied, so it gets
+the sub-tick number vanilla would have given it. A tick parked on a thread
+stays visible to `hasScheduledTick` there, which target blocks, observers and
+pointed dripstone act on. A group that parks something the rest of it could
+have seen -- an entity, or a game event that reaches past the margin -- stops,
+and the coordinator runs the rest of it at its places in the merge. Game events
+within the margin are heard on the spot, a tripwire's tick is filed with the
+42 blocks its string reaches, and a group near unloaded terrain runs on the
+coordinator, which may load a chunk as vanilla does. A random-circuit fuzzer
+compares this phase with vanilla tick by tick, on every block, entity and
+pending tick in order; see [the design note](docs/redstone-parity-2026-10-11.md).
+
 Ticks whose reach nothing bounds -- command blocks, which run arbitrary
 commands -- cannot honestly be placed in any component, so one of them anywhere
 in a tick's collected set sends the whole set back through vanilla's serial
@@ -144,9 +162,11 @@ loop. A structure block reaches just as far but never appears in that set: it
 has no tick of its own and places from a neighbour update, so its placement is
 parked for the barrier instead, which covers every phase rather than this one.
 
-It is off by default. It reproduces vanilla's fluid interactions block for block
-in testing (below), but it has been reported to hang a world that contains
-0-tick redstone, and that report is not yet explained.
+It is on by default since 2026-10-12, and timed both ways like the other phases:
+a level whose ticks do not pay for a barrier runs vanilla's loop, with the same
+result either way. An old report of a world with 0-tick redstone hanging with it
+on has not reproduced since the torch-burnout race was fixed (below), including
+an eight-minute 0-tick TNT cannon build with every phase forced parallel.
 
 ### Random ticks
 
@@ -578,6 +598,23 @@ conduit further still, a bell makes raiders glow at forty-eight, an end gateway
 teleports things into another dimension outright. Those tick on the level-owning
 thread, and they are the default contents of `blockEntities.blacklist`.
 
+Block entities can also tick in vanilla's order (`blockEntities.vanillaOrderLimit`
+above 0; off by default). A grid cell edge can fall between a moving piston and
+the observer it is about to trigger, or between two hoppers of one clock, and two
+passes run them in pass order. Ordered, the phase groups block entities by what
+each can actually reach -- a hopper four blocks (the container it feeds, a double
+chest's other half, their comparators), a furnace, brewing stand or campfire two,
+a beacon its pyramid, a bell nothing, and a moving piston, daylight detector,
+sculk sensor or any modded block entity the margin -- and runs the groups side by
+side, each in vanilla's order, with the same rank-keyed merge as scheduled
+ticks. A ring of hoppers a couple of dozen blocks from the next is a group of
+its own, and a group bigger than the limit is split by the grid. It is off by
+default because a dense contraption is one group: a TNT cannon's moving pistons
+are all within reach of each other, and in a cannon test world the phase took
+about 100 ms a tick in vanilla's order against 3.5 ms on the grid, whose stepped
+results matched vanilla's anyway. 512 orders all but the densest builds, for a
+server that would rather have exact redstone than cannon throughput.
+
 This is the phase most exposed to other mods. An entity that reaches across the
 world is unusual; a machine that does is a genre. If a tech modpack misbehaves,
 this is the first switch to try.
@@ -603,7 +640,9 @@ hopper and furnace in the game as absent — far worse than the race it guards.
 
 During a parallel pass the entity registry is **read-only**. Every structural
 write is queued and applied by the coordinator, in cell order, the instant the
-pass ends:
+pass ends -- or, in the phases that keep vanilla's order (scheduled ticks, and
+block entities when ordered), merged back into the order vanilla would have
+made them in:
 
 - entity spawn (`ServerLevel.addEntity`)
 - entity section transfer (`onMove`) and teardown (`onRemove`)
@@ -689,7 +728,9 @@ put behind a lock instead:
   a plain `long` incremented on every schedule. It is the whole ordering
   guarantee the tick system offers, and two threads scheduling at once lose an
   increment and produce two ticks claiming the same place in the sequence. Now
-  an atomic.
+  an atomic, and inside a pass not drawn at all: a tick created there is
+  numbered when its parked schedule is applied, in the order the coordinator
+  applies them (`SubTickOrder`).
 - **The point-of-interest index** (`PoiManager`, and the `SectionStorage` it
   extends). Villagers, iron golems, raiders and bees all reach it straight out
   of their ticks -- a bed, a job site, how many sections away the nearest
@@ -1024,7 +1065,7 @@ See the SpeeDeeEntity entry under Known limits.
     minChunks = 256
 
 [scheduledTicks]
-    enabled = false            # exact ordering, but see Known limits
+    enabled = true             # redstone and fluids in parallel, in vanilla's exact order
     minTicks = 64
     blacklist = ["minecraft:command_block", "minecraft:chain_command_block",
                  "minecraft:repeating_command_block"]
@@ -1037,6 +1078,7 @@ See the SpeeDeeEntity entry under Known limits.
 [blockEntities]
     enabled = true
     minTickers = 64
+    vanillaOrderLimit = 0      # above 0, what can reach each other ticks in vanilla's order (512)
     blacklist = ["minecraft:beacon", "minecraft:conduit",
                  "minecraft:bell", "minecraft:end_gateway"]
 ```
@@ -1087,7 +1129,7 @@ does freeze, that dump is the thing to send.
 Skein
   workers: 16
   cells: 8 chunks, 32-block margin
-  phases: dimensions, randomTicks, entities, blockEntities
+  phases: dimensions, scheduledTicks, randomTicks, entities, blockEntities
   dimension overlap: 1.01x  (6.42ms level work in 6.37ms wall)
     random ticks: 8.39x  (19.16ms in 2.28ms) 81 cells over 4 passes, 1152 parallel / 0 serial, 1036 deferred
     entities: 7.06x  (8.42ms in 1.19ms) 74 cells over 4 passes, 1107 parallel / 9 serial, 457 deferred
@@ -1496,12 +1538,23 @@ The in-level phases, additionally:
   a random tick in the same loop, instead of after it.
 - **Path invalidation is one pass late** for mobs in the same pass as the block
   that changed. See the navigation sweep above.
-- **`scheduledTicks` has an open report against it**: a world containing 0-tick
-  redstone froze with it on. The component split is exactly order-preserving on
-  paper and reproduces vanilla's fluid interactions block for block in testing,
-  and one vanilla cause of exactly that symptom has since been found and fixed
-  (`RECENT_TOGGLES`, above) -- but the report has not been reproduced since, so
-  the phase stays off by default until it has been.
+- **`scheduledTicks` had a report against it**: a world containing 0-tick redstone
+  froze with it on. One vanilla cause of exactly that symptom was found and fixed
+  (`RECENT_TOGGLES`, above), and it has not reproduced since, including an
+  eight-minute build of a 0-tick TNT cannon with every phase forced parallel. The
+  phase matches vanilla tick for tick in a random-circuit fuzzer -- every block,
+  entity and pending tick, in order, over six seeds and 2 to 16 threads -- and is on
+  by default since 2026-10-12. If a world does stall, the stall report names the
+  tick each worker was on.
+- **Entities can still tick out of vanilla's order.** The entity grid can put two
+  entities a few blocks apart in different passes, outside the cluster tier's
+  admitted types, so a minecart and a TNT, say, can tick in the other order. In the
+  redstone fuzzer with every phase on, blocks and entities still matched vanilla
+  for 600 ticks, but ticks that entities scheduled were numbered in pass order.
+- **Random draws and entity ids are not vanilla's.** A parallel phase draws from
+  a per-thread random source, and an entity takes its id when it is constructed,
+  on whichever thread. Vanilla seeds its random from the clock and its ids differ
+  between runs too, so neither was reproducible to begin with.
 - **Mods with unsynchronised per-level or static state.** The pieces vanilla and
   Forge have are handled; a mod that keeps its own is not, and Skein has
   no way to detect it. This is the one to keep in mind before turning the

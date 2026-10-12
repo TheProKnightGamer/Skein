@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * A split by proximity rather than by grid: work is grouped into connected
- * components, where anything within {@code linkDistance} of anything else in a
+ * components, where anything within reach of anything else in a
  * group is in that group.
  *
  * <p>{@link Partition} exists because it parallelises well. This exists because
@@ -30,7 +30,7 @@ import java.util.List;
  * spread out the work is. One lake of flowing water is one component and runs
  * exactly as it does in vanilla; forty separate farms are forty components.
  *
- * <p>Connectivity is decided between {@code linkDistance}-sized buckets, but
+ * <p>Connectivity is decided between buckets as wide as the longest link, but
  * not by bucket adjacency: two points in adjacent buckets can be nearly two
  * bucket widths apart, so adjacency merges things that are comfortably out of
  * reach of each other. Measured, that is not a small effect -- thirty-six
@@ -50,16 +50,28 @@ import java.util.List;
  * how far apart the work really is rather than by where the grid lines fell.
  * The test is done once per bucket pair after every point has been filed, so a
  * box that grows later cannot be missed.
+ *
+ * <p>Not everything needs the full link distance. A scheduled tick may set off
+ * a wire, but a hopper only touches the container it feeds and the comparators
+ * beside it, so a ring of hoppers a couple of dozen blocks from the next is a
+ * group of its own. Work can be filed with a shorter link of its own, and two
+ * buckets are joined at the mean of the longest links filed into each.
  */
 public final class ClusterPartition<T> {
 
     /** One connected component: the work in it, in vanilla order, and the writes it parked. */
     public static final class Group<T> {
         final List<T> items = new ArrayList<>();
+        /** Each item's place in the order everything was added in. */
+        final IntArrayList ranks = new IntArrayList();
         final DeferredBuffer deferred = new DeferredBuffer();
 
         public List<T> items() {
             return this.items;
+        }
+
+        public IntArrayList ranks() {
+            return this.ranks;
         }
 
         public DeferredBuffer deferred() {
@@ -78,12 +90,16 @@ public final class ClusterPartition<T> {
     private int[] minZ = new int[64];
     private int[] maxX = new int[64];
     private int[] maxZ = new int[64];
+    /** Per node, twice the widest half-link of anything filed into it; see {@link #addLinking}. */
+    private int[] nodeSpan = new int[64];
     private int[] rootGroups = new int[64];
     private int[] nodeGroups = new int[64];
     private final List<Group<T>> groups = new ArrayList<>();
     private final List<Group<T>> spare = new ArrayList<>();
 
     private int link = 80;
+    /** Node pairs joined because one piece of work reaches into the other's bucket; see {@link #add(Object, int, int, int)}. */
+    private final IntArrayList extraLinks = new IntArrayList();
 
     public ClusterPartition() {
         this.bucketNodes.defaultReturnValue(-1);
@@ -93,6 +109,7 @@ public final class ClusterPartition<T> {
         this.link = Math.max(1, linkDistance);
         for (Group<T> group : this.groups) {
             group.items.clear();
+            group.ranks.clear();
             this.spare.add(group);
         }
         this.groups.clear();
@@ -101,18 +118,62 @@ public final class ClusterPartition<T> {
         this.bucketNodes.clear();
         this.parent.clear();
         this.nodeKeys.clear();
+        this.extraLinks.clear();
     }
 
     /** Files one piece of work at a position. Joining happens in {@link #finish()}. */
     public void add(T item, int x, int z) {
-        long key = bucket(x, z);
-        int node = node(key);
+        addLinking(item, x, z, this.link);
+    }
+
+    /**
+     * Files one piece of work that needs a shorter link than the split's own:
+     * two pieces of work are joined when the gap between them is at most the
+     * mean of their link distances. Something that reaches {@code r} blocks
+     * where everything else reaches the margin {@code m}, in a split linked at
+     * {@code 2m + 16}, files with {@code 2r + 16}, and is joined to its own
+     * kind at {@code 2r + 16} and to the rest at {@code r + m + 16}. Clamped to
+     * the split's link distance, which is also the bucket width.
+     */
+    public void addLinking(T item, int x, int z, int linkDistance) {
+        int node = point(x, z, Math.max(0, Math.min(linkDistance, this.link)));
+        this.items.add(item);
+        this.itemNodes.add(node);
+    }
+
+    private int point(int x, int z, int span) {
+        int node = node(bucket(x, z));
         if (x < this.minX[node]) this.minX[node] = x;
         if (z < this.minZ[node]) this.minZ[node] = z;
         if (x > this.maxX[node]) this.maxX[node] = x;
         if (z > this.maxZ[node]) this.maxZ[node] = z;
-        this.items.add(item);
-        this.itemNodes.add(node);
+        if (span > this.nodeSpan[node]) this.nodeSpan[node] = span;
+        return node;
+    }
+
+    /**
+     * Files a piece of work that reaches {@code extra} blocks further along
+     * either horizontal axis than anything else: a tripwire hook's tick sets
+     * the hook at the far end of its string. The far ends are filed as points
+     * of their own, joined to this one, so whatever is within the link
+     * distance of them is in this group too.
+     */
+    public void add(T item, int x, int z, int extra) {
+        add(item, x, z);
+        if (extra <= 0) {
+            return;
+        }
+        int node = this.itemNodes.getInt(this.itemNodes.size() - 1);
+        reach(node, x - extra, z);
+        reach(node, x + extra, z);
+        reach(node, x, z - extra);
+        reach(node, x, z + extra);
+    }
+
+    private void reach(int from, int x, int z) {
+        int node = point(x, z, this.link);
+        this.extraLinks.add(from);
+        this.extraLinks.add(node);
     }
 
     public int size() {
@@ -125,6 +186,9 @@ public final class ClusterPartition<T> {
      */
     public void finish() {
         joinNeighbours();
+        for (int i = 0; i < this.extraLinks.size(); i += 2) {
+            union(this.extraLinks.getInt(i), this.extraLinks.getInt(i + 1));
+        }
         // Nodes were created in first-occurrence order, so resolving once per
         // node preserves group order without hashing/finding every item again.
         for (int node = 0; node < this.parent.size(); node++) {
@@ -139,7 +203,9 @@ public final class ClusterPartition<T> {
             this.nodeGroups[node] = groupIndex;
         }
         for (int i = 0; i < this.items.size(); i++) {
-            this.groups.get(this.nodeGroups[this.itemNodes.getInt(i)]).items.add(this.items.get(i));
+            Group<T> group = this.groups.get(this.nodeGroups[this.itemNodes.getInt(i)]);
+            group.items.add(this.items.get(i));
+            group.ranks.add(i);
         }
     }
 
@@ -150,6 +216,7 @@ public final class ClusterPartition<T> {
     public void release() {
         for (Group<T> group : this.groups) {
             group.items.clear();
+            group.ranks.clear();
             group.deferred.clear();
         }
         this.items.clear();
@@ -172,6 +239,7 @@ public final class ClusterPartition<T> {
         this.minZ[id] = Integer.MAX_VALUE;
         this.maxX[id] = Integer.MIN_VALUE;
         this.maxZ[id] = Integer.MIN_VALUE;
+        this.nodeSpan[id] = 0;
         this.rootGroups[id] = -1;
         return id;
     }
@@ -182,6 +250,7 @@ public final class ClusterPartition<T> {
         this.minZ = java.util.Arrays.copyOf(this.minZ, capacity);
         this.maxX = java.util.Arrays.copyOf(this.maxX, capacity);
         this.maxZ = java.util.Arrays.copyOf(this.maxZ, capacity);
+        this.nodeSpan = java.util.Arrays.copyOf(this.nodeSpan, capacity);
         this.rootGroups = java.util.Arrays.copyOf(this.rootGroups, capacity);
         this.nodeGroups = java.util.Arrays.copyOf(this.nodeGroups, capacity);
     }
@@ -211,9 +280,11 @@ public final class ClusterPartition<T> {
         }
     }
 
+    /** Doubled on both sides, so the mean of two odd link distances stays exact. */
     private boolean withinLink(int a, int b) {
-        return gap(this.minX[a], this.maxX[a], this.minX[b], this.maxX[b]) <= this.link
-                && gap(this.minZ[a], this.maxZ[a], this.minZ[b], this.maxZ[b]) <= this.link;
+        long link = (long) this.nodeSpan[a] + this.nodeSpan[b];
+        return 2 * gap(this.minX[a], this.maxX[a], this.minX[b], this.maxX[b]) <= link
+                && 2 * gap(this.minZ[a], this.maxZ[a], this.minZ[b], this.maxZ[b]) <= link;
     }
 
     private static long gap(int minA, int maxA, int minB, int maxB) {
