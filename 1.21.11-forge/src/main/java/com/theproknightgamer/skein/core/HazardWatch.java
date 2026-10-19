@@ -64,7 +64,7 @@ public final class HazardWatch {
         if (++seen >= SUGGEST_AFTER) {
             CLEAN_RUNS.put(block, REPORTED);
             Skein.LOGGER.info("Skein: {} has reacted to {} entities without writing anything. If its "
-                            + "entityInside, stepOn and fallOn genuinely cannot write, adding it to "
+                            + "entityInside, stepOn, fallOn and updateEntityMovementAfterFallOn genuinely cannot write, adding it to "
                             + "entities.cluster.inertBlocks stops it being parked at the barrier.",
                     BuiltInRegistries.BLOCK.getKey(block), SUGGEST_AFTER);
             return;

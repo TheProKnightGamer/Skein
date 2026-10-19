@@ -12,7 +12,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Runs a {@link Partition} through its four passes.
+ * Runs a {@link Partition} through its passes: the grid's four, then the wide
+ * grid's four.
  *
  * <p>One barrier per pass, the writes each pass parked applied in cell order
  * before the next pass opens, and whatever could not be placed run serially at
@@ -31,6 +32,12 @@ public final class ParallelPass {
     /** Below this a pass is cheaper to fold into the serial tail than to open a barrier for. */
     private static final int MIN_CELLS_PER_PASS = 2;
     private static final int MIN_ITEMS_PER_PASS = 24;
+    /**
+     * The same for a pass of the wide grid. What lands there is a mob with a long
+     * follow range or something larger -- a villager's tick is several times a
+     * cow's -- so fewer of them pay for the barrier.
+     */
+    private static final int MIN_WIDE_ITEMS_PER_PASS = 8;
 
     /**
      * @return true when the partition was run in parallel -- cells and serial
@@ -46,8 +53,10 @@ public final class ParallelPass {
         if (pool == null) {
             return false;
         }
+        partition.fileWide();
         for (int pass = 0; pass < Partition.PASSES; pass++) {
-            if (!worthAPass(partition.pass(pass))) {
+            if (!worthAPass(partition.pass(pass),
+                    pass >= Partition.WIDE_PASS ? MIN_WIDE_ITEMS_PER_PASS : MIN_ITEMS_PER_PASS)) {
                 partition.collapse(pass);
             }
         }
@@ -94,7 +103,7 @@ public final class ParallelPass {
         return true;
     }
 
-    private static <T> boolean worthAPass(List<Partition.Cell<T>> cells) {
+    private static <T> boolean worthAPass(List<Partition.Cell<T>> cells, int minItems) {
         if (cells.size() < MIN_CELLS_PER_PASS) {
             // One cell is one task, which the pool runs on the caller anyway --
             // so it is the serial tail with a barrier bolted on.
@@ -104,7 +113,7 @@ public final class ParallelPass {
         for (Partition.Cell<T> cell : cells) {
             count += cell.items().size();
         }
-        return count >= MIN_ITEMS_PER_PASS;
+        return count >= minItems;
     }
 
     private static <T> void runCell(ServerLevel level,

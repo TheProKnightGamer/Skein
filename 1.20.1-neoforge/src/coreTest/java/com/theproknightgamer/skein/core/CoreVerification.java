@@ -27,8 +27,9 @@ public final class CoreVerification {
         clusterPartition();
         clusterPartitionLinks();
         gridPartition();
+        widePartition();
         pool();
-        System.out.println("Core verification passed: entity precedence, point queries, component ordering, grid safety, nested barriers.");
+        System.out.println("Core verification passed: entity precedence, point queries, component ordering, grid safety, wide members, nested barriers.");
     }
 
     private static void check(boolean condition, String message) {
@@ -400,6 +401,7 @@ public final class CoreVerification {
                     }
                 }
             }
+            partition.fileWide();
             int count = partition.sort() + partition.serial().size();
             check(count == 1000 && partition.all().size() == 1000, "partition lost items");
             boolean[] seen = new boolean[1000];
@@ -450,6 +452,123 @@ public final class CoreVerification {
                 }
             }
         }
+    }
+
+    /**
+     * Members too wide for the grid go to the wide grid's passes: no two of one
+     * pass's cells may reach each other, nothing is lost or doubled, a village of
+     * follow-range-48 mobs all finds cells, and a few huge outliers do not
+     * coarsen the wide grid for everyone else.
+     */
+    private static void widePartition() {
+        Random random = new Random(9113);
+        Partition<Integer> partition = new Partition<>();
+        for (int trial = 0; trial < 60; trial++) {
+            int margin = 32;
+            Grid grid = new Grid(128 + 32 * (trial % 3), margin);
+            partition.begin(grid);
+            int count = 600;
+            double[][] spans = new double[count][];
+            for (int i = 0; i < count; i++) {
+                double x = random.nextDouble() * 1500 - 750, z = random.nextDouble() * 1500 - 750;
+                int kind = random.nextInt(10);
+                double reach = kind < 5 ? 0 : kind < 9 ? 16 : random.nextDouble() * 160;
+                spans[i] = new double[] { x - reach, x + reach, z - reach, z + reach };
+                partition.place(i, spans[i][0], spans[i][1], spans[i][2], spans[i][3]);
+            }
+            partition.fileWide();
+            int parallel = partition.sort();
+            check(parallel + partition.serial().size() == count && partition.all().size() == count,
+                    "wide filing lost items");
+            int[] cellOf = new int[count];
+            int[] passOf = new int[count];
+            java.util.Arrays.fill(cellOf, -1);
+            int cellId = 0;
+            for (int pass = 0; pass < Partition.PASSES; pass++) {
+                for (Partition.Cell<Integer> cell : partition.pass(pass)) {
+                    for (int item : cell.items()) {
+                        check(cellOf[item] < 0, "item filed twice");
+                        cellOf[item] = cellId;
+                        passOf[item] = pass;
+                    }
+                    cellId++;
+                }
+            }
+            for (int item : partition.serial()) {
+                check(cellOf[item] < 0, "item both serial and in a cell");
+            }
+            for (int a = 0; a < count; a++) {
+                if (cellOf[a] < 0) continue;
+                for (int b = a + 1; b < count; b++) {
+                    if (cellOf[b] < 0 || passOf[b] != passOf[a] || cellOf[b] == cellOf[a]) continue;
+                    // Each reaches its span plus the margin; across cells of one pass these never meet.
+                    boolean overlap = spans[a][0] - margin < spans[b][1] + margin && spans[b][0] - margin < spans[a][1] + margin
+                            && spans[a][2] - margin < spans[b][3] + margin && spans[b][2] - margin < spans[a][3] + margin;
+                    check(!overlap, "two cells of one pass reach each other");
+                }
+            }
+            partition.release();
+        }
+
+        // A village: every follow-range-48 mob finds a cell, in the ordinary or the wide grid.
+        Grid grid = new Grid(128, 32);
+        partition.begin(grid);
+        for (int i = 0; i < 300; i++) {
+            double x = random.nextDouble() * 384, z = random.nextDouble() * 384;
+            double reach = i % 10 == 0 ? 16 : 0;
+            partition.place(i, x - reach, x + reach, z - reach, z + reach);
+        }
+        partition.fileWide();
+        partition.sort();
+        check(partition.serial().isEmpty(), "a village member was left serial");
+        int wideMembers = 0;
+        for (int pass = Partition.WIDE_PASS; pass < Partition.PASSES; pass++) {
+            for (Partition.Cell<Integer> cell : partition.pass(pass)) wideMembers += cell.items().size();
+        }
+        check(wideMembers > 0 && wideMembers < 30, "wide grid took the wrong members");
+        partition.release();
+
+        // Two huge outliers among forty villagers leave the wide grid sized for villagers.
+        partition.begin(grid);
+        for (int i = 0; i < 42; i++) {
+            double x = random.nextDouble() * 1024, z = random.nextDouble() * 1024;
+            double reach = i < 2 ? 400 : 16;
+            partition.place(i, x - reach, x + reach, z - reach, z + reach);
+        }
+        partition.fileWide();
+        partition.sort();
+        for (int item : partition.serial()) {
+            check(item < 2, "a villager went serial beside huge outliers");
+        }
+        partition.release();
+
+        // Only footprints the ordinary grid could hold somewhere are admitted: a ghast's
+        // (width 136) or a width of exactly a cell less two margins stays serial.
+        partition.begin(grid);
+        for (int i = 0; i < 40; i++) {
+            double x = 100.0 * i, z = 300 + 7.0 * i;
+            double reach = i < 10 ? 68 : i < 20 ? 32 : 16;
+            partition.place(i, x - reach, x + reach, z - reach, z + reach);
+        }
+        partition.fileWide();
+        partition.sort();
+        java.util.Set<Integer> serialSet = new java.util.HashSet<>(partition.serial());
+        for (int i = 0; i < 20; i++) {
+            check(serialSet.contains(i), "an over-wide member left the level thread: " + i);
+        }
+        for (int i = 20; i < 40; i++) {
+            check(!serialSet.contains(i), "a villager-width member stayed serial: " + i);
+        }
+        partition.release();
+
+        // Fewer wide members than the minimum run serially, as before.
+        partition.begin(grid);
+        for (int i = 0; i < Partition.MIN_WIDE - 1; i++) {
+            partition.place(i, 40.0 * i - 16, 40.0 * i + 16, 70 - 16, 70 + 16);
+        }
+        partition.fileWide();
+        check(partition.sort() + partition.serial().size() == Partition.MIN_WIDE - 1, "small wide set lost items");
+        partition.release();
     }
 
     private static void pool() throws Exception {

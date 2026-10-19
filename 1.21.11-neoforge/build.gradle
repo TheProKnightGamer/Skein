@@ -195,6 +195,7 @@ if (providers.gradleProperty('speedeeTestJar').isPresent()) {
                 if (providers.gradleProperty('benchmarkSamples').isPresent()) systemProperty 'skein.test.samples', providers.gradleProperty('benchmarkSamples').get()
                 systemProperty 'skein.test.superchunk', providers.gradleProperty('superchunkTest').isPresent().toString()
                 systemProperty 'skein.test.demotion', providers.gradleProperty('demotionTest').isPresent().toString()
+                systemProperty 'skein.test.alternateCurrent', providers.gradleProperty('alternateCurrentTest').isPresent().toString()
                 systemProperty 'skein.test.expectSerialBenchmark', providers.gradleProperty('expectSerialBenchmark').isPresent().toString()
                 if (benchmarkSkeinJar != null) systemProperty 'skein.test.jar', file(benchmarkSkeinJar).absolutePath
             }

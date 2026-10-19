@@ -164,4 +164,5 @@ pooled entity tracking beside Sable, and pinning create_connected link types.
 - Hooks: 187 checked with SpeeDeeEntity, 184 with Alternate Current, 188 with
   SuperChunk and SpeeDeeEntity, 0 missing.
 
-Not yet ported to the other seven lines.
+Ported to the other seven lines for 1.1.0 on 2026-10-17, with each mod fix where that mod exists
+for the version; see [port-1.1.0-2026-10-17.md](port-1.1.0-2026-10-17.md).

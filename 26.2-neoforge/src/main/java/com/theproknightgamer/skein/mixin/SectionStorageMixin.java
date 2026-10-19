@@ -53,6 +53,9 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "get")
     private Optional skein$lockGet(long sectionKey, Operation<Optional> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            return original.call(sectionKey);
+        }
         this.skein$poiLock.lock();
         try {
             return original.call(sectionKey);
@@ -63,6 +66,9 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "getOrLoad")
     private Optional skein$lockGetOrLoad(long sectionKey, Operation<Optional> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            return original.call(sectionKey);
+        }
         this.skein$poiLock.lock();
         try {
             return original.call(sectionKey);
@@ -73,6 +79,9 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "getOrCreate")
     private Object skein$lockGetOrCreate(long sectionKey, Operation<Object> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            return original.call(sectionKey);
+        }
         this.skein$poiLock.lock();
         try {
             return original.call(sectionKey);
@@ -83,6 +92,10 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "setDirty")
     private void skein$lockSetDirty(long sectionPos, Operation<Void> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            original.call(sectionPos);
+            return;
+        }
         this.skein$poiLock.lock();
         try {
             original.call(sectionPos);
@@ -99,6 +112,10 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
      */
     @WrapMethod(method = "tick")
     private void skein$lockTick(BooleanSupplier aheadOfTime, Operation<Void> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            original.call(aheadOfTime);
+            return;
+        }
         this.skein$poiLock.lock();
         try {
             original.call(aheadOfTime);
@@ -109,6 +126,9 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "hasWork")
     private boolean skein$lockHasWork(Operation<Boolean> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            return original.call();
+        }
         this.skein$poiLock.lock();
         try {
             return original.call();
@@ -121,6 +141,10 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
     @HookFor({Hooks.Feature.IN_LEVEL, Hooks.Feature.PARALLEL_SAVING})
     @WrapMethod(method = "flush")
     private void skein$lockFlush(ChunkPos chunkPos, Operation<Void> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            original.call(chunkPos);
+            return;
+        }
         this.skein$poiLock.lock();
         try {
             original.call(chunkPos);
@@ -131,6 +155,10 @@ public abstract class SectionStorageMixin implements SkeinPoiIndex {
 
     @WrapMethod(method = "remove(Lnet/minecraft/world/level/ChunkPos;)V")
     private void skein$lockRemove(ChunkPos chunkPos, Operation<Void> original) {
+        if (this.skein$poiLock.isHeldByCurrentThread()) {
+            original.call(chunkPos);
+            return;
+        }
         this.skein$poiLock.lock();
         try {
             original.call(chunkPos);

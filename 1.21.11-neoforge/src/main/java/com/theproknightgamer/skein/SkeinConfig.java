@@ -11,6 +11,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
@@ -529,6 +530,18 @@ public final class SkeinConfig {
          * is parked only there.
          */
         public static final Set<Block> landingHazards = ConcurrentHashMap.newKeySet();
+
+        /**
+         * Blocks in {@link #hazardBlocks} that also override
+         * {@code updateEntityMovementAfterFallOn}, the hook {@code Entity.move} calls
+         * for the block under an entity that has just landed. A Create belt
+         * calls its own {@code entityInside} from there, which puts the item
+         * into the belt's inventory -- the same write {@link #hazardBlocks}
+         * parks, reached by a path {@code checkInsideBlocks} never sees. A
+         * block that overrides it only to change the bounce (slime, beds) is
+         * not in {@link #hazardBlocks} and so is not parked.
+         */
+        public static final Set<Block> afterFallHazards = ConcurrentHashMap.newKeySet();
         public static final Set<String> inertBlockIds = ConcurrentHashMap.newKeySet();
 
         /**
@@ -777,6 +790,7 @@ public final class SkeinConfig {
 
         Live.hazardBlocks.clear();
         Live.landingHazards.clear();
+        Live.afterFallHazards.clear();
         for (Block block : BuiltInRegistries.BLOCK) {
             if (overrides(block.getClass(), "entityInside",
                           BlockState.class, Level.class, BlockPos.class, Entity.class,
@@ -791,6 +805,10 @@ public final class SkeinConfig {
                                  Level.class, BlockState.class, BlockPos.class, Entity.class, double.class)) {
                 Live.landingHazards.add(block);
             }
+            if (Live.hazardBlocks.contains(block) && overrides(block.getClass(), Block.class,
+                    "updateEntityMovementAfterFallOn", BlockGetter.class, Entity.class)) {
+                Live.afterFallHazards.add(block);
+            }
         }
 
         for (String id : Live.inertBlockIds) {
@@ -801,6 +819,7 @@ public final class SkeinConfig {
                 Block inert = BuiltInRegistries.BLOCK.getValue(location);
                 Live.hazardBlocks.remove(inert);
                 Live.landingHazards.remove(inert);
+                Live.afterFallHazards.remove(inert);
             }
         }
         HazardWatch.reset();

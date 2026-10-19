@@ -19,6 +19,17 @@ public final class SpeeDeeCache {
         void skein$clear(long tick);
     }
 
+    /**
+     * Implemented where TickCache carries a block epoch (SpeeDeeEntity 1.0.2's
+     * {@code MoveMemo}): answers shared between identical entities are valid
+     * only while no block has been written since, and SpeeDeeEntity ends the
+     * epoch from its own {@code setBlock} hook -- on the level's cache, which a
+     * thread's cache here is not.
+     */
+    public interface Epoch {
+        void skein$endBlockEpoch();
+    }
+
     private static final class Slot {
         final Entry cache;
         long tick = Long.MIN_VALUE;
@@ -47,6 +58,10 @@ public final class SpeeDeeCache {
         long current = revision.get();
         if (slot.tick != tick || slot.revision != current) {
             slot.cache.skein$clear(tick);
+            if (slot.revision != current && slot.cache instanceof Epoch epoch) {
+                // A block was written since this thread last asked.
+                epoch.skein$endBlockEpoch();
+            }
             slot.tick = tick;
             slot.revision = current;
         }

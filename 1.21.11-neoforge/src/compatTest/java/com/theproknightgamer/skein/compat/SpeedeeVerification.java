@@ -60,6 +60,10 @@ public final class SpeedeeVerification {
             new DemotionVerification();
             return;
         }
+        if (Boolean.getBoolean("skein.test.alternateCurrent")) {
+            new AlternateCurrentVerification();
+            return;
+        }
         NeoForge.EVENT_BUS.addListener(ServerStartedEvent.class, SpeedeeVerification::start);
         NeoForge.EVENT_BUS.addListener(ServerTickEvent.Pre.class, SpeedeeVerification::beforeTick);
         NeoForge.EVENT_BUS.addListener(ServerTickEvent.Post.class, SpeedeeVerification::afterTick);
@@ -74,6 +78,12 @@ public final class SpeedeeVerification {
             MinecraftServer server = event.getServer();
             ServerLevel level = server.overworld();
             ChunkCacheVerification.run(level);
+            // Landing hooks that only bounce (slime, beds) are not parked; only a block that
+            // also reacts inside (a Create belt) would be, and vanilla has none.
+            check(com.theproknightgamer.skein.SkeinConfig.Live.afterFallHazards.isEmpty()
+                            || !ModList.get().getMods().stream().allMatch(m -> m.getModId().matches(
+                                    "minecraft|neoforge|skein|skein_speedee_test|speedeeentity")),
+                    "vanilla blocks parked on landing: " + com.theproknightgamer.skein.SkeinConfig.Live.afterFallHazards);
             ExplosionVerification.run(level);
             ExplosionRaysVerification.run(level);
             ProjectileVerification.run(level);
@@ -103,6 +113,7 @@ public final class SpeedeeVerification {
             leftovers.forEach(Entity::discard);
             cacheOwnership(level, server.getLevel(Level.NETHER));
             blockChanges(level);
+            moveMemos(level);
             try {
                 Class.forName(OFEM + "EntityColliders");
                 indexed = true;
@@ -222,6 +233,41 @@ public final class SpeedeeVerification {
         check(collision(probe(level), delta).x < 4, "direct chunk placement kept cached CLEAR");
         level.setBlock(wall, Blocks.AIR.defaultBlockState(), 3);
         check(level.getGameTime() == tick, "same-tick fixture advanced time");
+    }
+
+    /**
+     * SpeeDeeEntity 1.0.2's move memos and air-region memo reach the level's
+     * cache directly: each thread must get its own, the same one every time,
+     * and a block write must end that cache's block epoch.
+     */
+    private static void moveMemos(ServerLevel level) throws Exception {
+        try {
+            Class.forName(OFEM + "MoveMemo");
+        } catch (ClassNotFoundException older) {
+            return;
+        }
+        Method get = Class.forName(OFEM + "CacheHolder").getMethod("speedee$tickCache");
+        java.lang.reflect.Field epoch = Class.forName(OFEM + "TickCache").getField("blockEpoch");
+        java.util.Map<Thread, Object> seen = new java.util.concurrent.ConcurrentHashMap<>();
+        Skein.pool().invokeAll(64, i -> {
+            try {
+                Object cache = get.invoke(level);
+                check(cache == get.invoke(level), "a thread's move-memo cache changed between two calls");
+                Object before = seen.putIfAbsent(Thread.currentThread(), cache);
+                check(before == null || before == cache, "a thread was handed two move-memo caches");
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        check(seen.size() > 1 && new java.util.HashSet<>(seen.values()).size() == seen.size(),
+                "threads shared a move-memo cache: " + seen.size() + " threads");
+        Object mine = get.invoke(level);
+        long before = epoch.getLong(mine);
+        BlockPos wall = new BlockPos(2, 70, 2);
+        level.setBlock(wall, Blocks.STONE.defaultBlockState(), 3);
+        level.setBlock(wall, Blocks.AIR.defaultBlockState(), 3);
+        Object after = get.invoke(level);
+        check(after == mine && epoch.getLong(after) > before, "a block write did not end the thread cache's block epoch");
     }
 
     private static void entityIndex(ServerLevel level) throws Exception {

@@ -169,10 +169,12 @@ public final class EntityTicker {
      * wrong is a race rather than a slowdown, so the set is opt-in.
      */
     private static boolean isClusterable(Entity entity) {
+        // The type test first: isPinned is the expensive part, and file() asks it
+        // again for everything this turns down.
         return SkeinConfig.Live.clusterEntities
-                && !isPinned(entity)
                 && !SkeinConfig.Live.clusterTypes.isEmpty()
-                && SkeinConfig.Live.clusterTypes.containsKey(entity.getType());
+                && SkeinConfig.Live.clusterTypes.containsKey(entity.getType())
+                && !isPinned(entity);
     }
 
     /**

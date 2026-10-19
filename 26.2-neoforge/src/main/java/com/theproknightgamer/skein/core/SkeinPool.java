@@ -132,6 +132,11 @@ public final class SkeinPool {
         return this.workers.length;
     }
 
+    /** The worker threads, for per-thread state another mod needs built ahead of a pass. */
+    public Thread[] threads() {
+        return this.workers.clone();
+    }
+
     private void workerLoop() {
         while (this.running) {
             Runnable task = this.queue.poll();
@@ -198,6 +203,22 @@ public final class SkeinPool {
 
     /** Runs indexed work without constructing a list of capturing task lambdas. */
     public void invokeAll(int count, IntConsumer action) {
+        invokeAll(count, action, false);
+    }
+
+    /**
+     * As {@link #invokeAll(int, IntConsumer)}, and with {@code callerFirst} the
+     * caller runs index 0 itself, whoever else is awake.
+     *
+     * <p>Otherwise index 0 goes to whichever runner reaches the cursor first,
+     * and the caller is the one waking the others, so a woken worker often
+     * wins it. For the cells of a pass that does not matter. For dimensions it
+     * does: the levels are ordered heaviest first, and the heaviest one on a
+     * worker leaves the server thread with a light level and then nothing to
+     * do -- it helps only its own batch -- while the heavy level's own passes
+     * run with one runner fewer.
+     */
+    public void invokeAll(int count, IntConsumer action, boolean callerFirst) {
         if (count < 0) {
             throw new IllegalArgumentException("Negative task count");
         }
@@ -211,24 +232,35 @@ public final class SkeinPool {
 
         int runners = Math.min(count, this.workers.length + 1);
         Batch batch = new Batch(count, runners, action, Thread.currentThread());
+        if (callerFirst) {
+            // Claimed before any worker can see the batch.
+            batch.next.set(1);
+        }
         // One runner is the caller itself; the rest go to the workers.
         for (int i = 1; i < runners; i++) {
             this.queue.add(batch);
         }
         wake(runners - 1);
+        if (callerFirst) {
+            try {
+                action.accept(0);
+            } catch (Throwable error) {
+                batch.failed(error);
+            }
+        }
         batch.run();
+
+        // Every index is claimed now, so a runner of this batch still in the
+        // queue has nothing left to do: take them all back and count them out
+        // in one sweep. Runners are only queued above, so none can appear later.
+        while (this.queue.remove(batch)) {
+            batch.finished();
+        }
 
         int spins = 0;
         long opened = System.nanoTime();
         boolean reported = false;
         while (batch.outstanding.get() > 0) {
-            if (this.queue.remove(batch)) {
-                // A runner no worker picked up. Every index is claimed, so
-                // running it would only count it out; do that directly.
-                batch.finished();
-                spins = 0;
-                continue;
-            }
             // Every remaining runner is on another thread, so this is the tail
             // of the pass and the only question is how cheaply we can notice
             // it end.

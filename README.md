@@ -24,7 +24,7 @@ exactly where vanilla ends it. Players joining a server running Skein don't need
   tick can have (a mob's pathfinding, a hopper's neighbour, a sapling becoming a tree) stays
   inside a safety margin, so cells that run together never touch the same blocks. Four offset grids
   mean no position sits on an edge. Mobs that reach further than the margin, like villagers, get
-  their own coarser passes instead of falling back to the main thread (1.21.1 NeoForge so far).
+  their own coarser passes instead of falling back to the main thread.
 - **Redstone in parallel, in vanilla's exact order.** Scheduled ticks (repeaters, comparators,
   observers, fluids, falling blocks) run in groups of what can affect each other, each in vanilla's
   order, and what the groups share is put back in vanilla's order too, down to the sub-tick numbers
@@ -42,9 +42,10 @@ exactly where vanilla ends it. Players joining a server running Skein don't need
 
 Each folder is a complete project for one Minecraft version and loader. They share the same
 features, commands and config keys, so a server can change version or loader and keep its config.
-New work lands in one folder first and is ported to the rest: the October 2026 scheduling round
-and the Alternate Current, Create belt and SuperChunk fixes are in `1.21.1-neoforge` so far, and the
-TNT-cannon work and vanilla-order redstone are in all eight.
+New work lands in one folder first and is ported to the rest; as of 1.1.0 all eight carry the same
+work. Fixes for another mod apply where that mod exists for the version: Create on 1.20.1 and
+1.21.1 NeoForge, SuperChunk on 1.20.1, 1.21.1 NeoForge and 1.21.11 NeoForge, Alternate Current on
+NeoForge 1.21.1, 1.21.11 and 26.2.
 
 | Folder | Minecraft | Loader | Java |
 |---|---|---|---|
@@ -77,7 +78,7 @@ The same generated world on each version and loader, on a dedicated server with 
 | 1.20.1 NeoForge | 14.7 &rarr; 8.6 (**1.7x**) | 4.5 &rarr; 2.6 (**1.7x**) | 24.8 &rarr; 10.2 (**2.4x**) |
 | 1.20.1 Forge | 15.4 &rarr; 8.7 (**1.8x**) | 4.5 &rarr; 2.7 (**1.7x**) | 25.1 &rarr; 10.2 (**2.5x**) |
 
-Those are release 1.0.1. The current 1.21.1 NeoForge source is faster again on the same bench:
+Those are release 1.0.1. 1.1.0 is faster again, measured on 1.21.1 NeoForge:
 the mob scenario **28%** and the mixed scenario **20%** below 1.0.1, and a quiet server 17% below,
 from villagers no longer ticking serially, an adaptive governor that re-measures properly, and
 cheaper bookkeeping ([report](1.21.1-neoforge/docs/optimization-2026-10-09.md)). On a quiet

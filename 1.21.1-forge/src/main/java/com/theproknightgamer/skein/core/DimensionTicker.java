@@ -13,6 +13,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.event.ForgeEventFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,6 +43,9 @@ public final class DimensionTicker {
 
     /** Handed back to the vanilla loop when Skein has already ticked the levels. */
     public static final ServerLevel[] NO_LEVELS = new ServerLevel[0];
+
+    private static final Comparator<ServerLevel> HEAVIEST_FIRST =
+            Comparator.comparingDouble((ServerLevel level) -> -TickMetrics.averageMillis(level.dimension()));
 
     private static volatile boolean phaseActive;
     private static final Set<ResourceKey<Level>> quarantined = ConcurrentHashMap.newKeySet();
@@ -171,6 +175,12 @@ public final class DimensionTicker {
             // server thread waits: strictly worse than vanilla.
             return false;
         }
+        // Heaviest first, by each level's recent tick time, and the server
+        // thread runs the first (see SkeinPool#invokeAll(int, IntConsumer,
+        // boolean)): the level with the most in-level work keeps every worker
+        // for its own passes, and the busiest level stays on the thread vanilla
+        // ticks it on. A stable sort, so ties keep the server's order.
+        parallel.sort(HEAVIEST_FIRST);
 
         long wallStart = Util.getNanos();
 
@@ -186,7 +196,7 @@ public final class DimensionTicker {
         AtomicReference<Throwable> fatal = new AtomicReference<>();
         phaseActive = true;
         try {
-            pool.invokeAll(parallel.size(), index -> tickOne(parallel.get(index), haveTime, recordTime, fatal));
+            pool.invokeAll(parallel.size(), index -> tickOne(parallel.get(index), haveTime, recordTime, fatal), true);
         } finally {
             phaseActive = false;
         }

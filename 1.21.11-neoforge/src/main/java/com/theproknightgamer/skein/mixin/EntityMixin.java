@@ -7,9 +7,10 @@ import net.minecraft.world.level.portal.TeleportTransition;
 import com.theproknightgamer.skein.core.DeferredWork;
 
 import com.theproknightgamer.skein.core.DimensionTicker;
-
-
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.entity.Entity;
 
 import net.minecraft.world.entity.PortalProcessor;
@@ -170,6 +171,27 @@ public abstract class EntityMixin {
             }
         }
         original.call(block, level, state, pos, entity, fallDistance);
+    }
+
+    /**
+     * The block under a clustered entity that has just landed, when that block
+     * reaches its {@code entityInside} through {@code updateEntityMovementAfterFallOn}
+     * -- a Create belt taking an item into its inventory. Two items on one belt
+     * twenty blocks long are far enough apart to share a cluster pass and both
+     * write the belt's inventory, so the call waits for the barrier like
+     * {@code entityInside} itself. What the default does to the entity (its
+     * vertical motion zeroed) is then applied at the barrier; by the end of the
+     * tick the motion is the same.
+     */
+    @HookFor(Hooks.Feature.IN_LEVEL)
+    @WrapOperation(method = "move", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/block/Block;updateEntityMovementAfterFallOn(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/world/entity/Entity;)V"))
+    private void skein$parkAfterFall(Block block, BlockGetter getter, Entity entity, Operation<Void> original) {
+        if (TickContext.clustered() && SkeinConfig.Live.afterFallHazards.contains(block)
+                && DeferredWork.park(() -> skein$replayWatched(block, () -> original.call(block, getter, entity)))) {
+            return;
+        }
+        original.call(block, getter, entity);
     }
 
     /** Runs a parked block reaction, noting whether it wrote anything; see {@link HazardWatch}. */

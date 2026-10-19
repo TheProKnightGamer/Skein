@@ -112,12 +112,18 @@ public final class SkeinMixinPlugin implements IMixinConfigPlugin {
                 mixins.add("compat.SpeeDeeEntityCollidersMixin");
                 mixins.add("compat.SpeeDeeEpochAccessor");
             }
+            // 1.0.2 also reads the level's cache directly, for shared move answers.
+            boolean memo = containsClass(SPEEDEE_ENTITY, "com/theproknightgamer/speedeeentity/ofem/MoveMemo.class");
+            if (memo) {
+                mixins.add("compat.SpeeDeeCacheHolderMixin");
+                mixins.add("compat.SpeeDeeBlockEpochMixin");
+            }
             // Worth a line in the log: this silently changes how another mod's
             // optimisation stores its answers, and an operator chasing a collision
             // bug should be able to see that it happened.
             org.apache.logging.log4j.LogManager.getLogger("Skein").info(
-                    "Skein: SpeeDeeEntity found; per-thread clearance caches{}, with block-change invalidation",
-                    indexed ? " and a shared per-tick collider index" : "");
+                    "Skein: SpeeDeeEntity found; per-thread clearance caches{}{}, with block-change invalidation",
+                    memo ? " and move memos" : "", indexed ? " and a shared per-tick collider index" : "");
         }
         Hooks.expectMixins(this.mixinPackage, mixins);
         return mixins;

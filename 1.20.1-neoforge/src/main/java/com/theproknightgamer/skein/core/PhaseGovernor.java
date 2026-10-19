@@ -62,10 +62,24 @@ public final class PhaseGovernor {
     /** Exponential moving average weight, as a right shift: 1/8 of each new sample. */
     private static final int SMOOTHING = 3;
 
+    /**
+     * The most one tick on the path in use may count for, as a multiple of its
+     * average: a garbage collection or a burst of chunk loading inside one
+     * phase says nothing about the path, and unclamped it could flip the
+     * choice on its own. A real change in load still comes through within a
+     * few ticks, since each one may raise the average by up to {@code (CLAMP
+     * - 1) / 8}.
+     */
+    private static final int CLAMP = 4;
+
     private final long[] parallelNanos = new long[PHASES];
     private final long[] serialNanos = new long[PHASES];
     private final int[] sinceProbe = new int[PHASES];
+    /** Probes in a row that confirmed the path in use; each one doubles the wait for the next. */
+    private final int[] confirmed = new int[PHASES];
     private final boolean[] parallel = new boolean[PHASES];
+    /** Whether this tick took the other path to re-time it, rather than the one preferred. */
+    private final boolean[] probing = new boolean[PHASES];
     private final long[] started = new long[PHASES];
     // Workers can announce a cost discontinuity during this tick. The next
     // entity phase begins only after every worker/barrier from this one closes.
@@ -91,7 +105,11 @@ public final class PhaseGovernor {
         if (phase == TickMetrics.Phase.ENTITIES) this.entityBurst = false;
         // A hint only bypasses the historical cost estimate, never eligibility
         // or the partition's admission/geometry rules.
+        this.probing[i] = false;
         this.parallel[i] = eligible && (burst || wantsParallel(i));
+        if (burst && this.parallel[i] && !prefersParallel(i)) {
+            this.probing[i] = true;
+        }
         return this.parallel[i];
     }
 
@@ -100,7 +118,19 @@ public final class PhaseGovernor {
         return this.parallel[phase.ordinal()];
     }
 
-    /** Closes the phase and folds its cost into the average for the path it took. */
+    /**
+     * Closes the phase and folds its cost into the average for the path it took.
+     *
+     * <p>A probe replaces the other path's figure outright instead of moving it
+     * an eighth of the way. That figure was last brought up to date a probe
+     * interval ago -- up to two minutes -- and is the only thing standing
+     * between the level and the faster path: eased in an eighth at a time, one
+     * bad sample (the first, cold-JIT parallel tick of a phase; a parallel tick
+     * while the machine was busy with something else) kept the in-level phases
+     * serial for minutes after the server started. Measured on a loaded
+     * machine, 1440 mobs ran serially at 30-50ms a tick for a minute and a half
+     * while the parallel path, once re-timed, took 24ms.
+     */
     public void finish(TickMetrics.Phase phase) {
         int i = phase.ordinal();
         long elapsed = Util.getNanos() - this.started[i];
@@ -108,7 +138,18 @@ public final class PhaseGovernor {
             return;
         }
         long[] into = this.parallel[i] ? this.parallelNanos : this.serialNanos;
-        into[i] = into[i] == 0 ? elapsed : into[i] + ((elapsed - into[i]) >> SMOOTHING);
+        if (into[i] == 0 || this.probing[i]) {
+            into[i] = Math.max(1L, elapsed);
+        } else {
+            long sample = Math.min(elapsed, into[i] * CLAMP);
+            into[i] = into[i] + ((sample - into[i]) >> SMOOTHING);
+        }
+        if (this.probing[i]) {
+            // Back off only while probes keep agreeing with the choice; one that
+            // overturns it starts the next interval from the minimum again.
+            this.probing[i] = false;
+            this.confirmed[i] = prefersParallel(i) == this.parallel[i] ? 0 : this.confirmed[i] + 1;
+        }
     }
 
     public long parallelNanos(TickMetrics.Phase phase) {
@@ -119,28 +160,41 @@ public final class PhaseGovernor {
         return this.serialNanos[phase.ordinal()];
     }
 
-    private static int probeInterval(long a, long b) {
+    /**
+     * The ratio rule above, held back to {@code PROBE_MIN << confirmed}: until
+     * probes have agreed with the choice a few times in a row, the figures
+     * behind a large ratio may be one bad sample, and waiting two minutes to
+     * find out costs two minutes on the slower path.
+     */
+    private static int probeInterval(long a, long b, int confirmed) {
         long hi = Math.max(a, b);
         long lo = Math.max(1L, Math.min(a, b));
         long ratio = Math.max(1L, hi / lo);
-        return (int) Math.min(PROBE_MAX, Math.max(PROBE_MIN, PROBE_BASE * ratio));
+        long byRatio = Math.min(PROBE_MAX, Math.max(PROBE_MIN, PROBE_BASE * ratio));
+        return (int) Math.min(byRatio, (long) PROBE_MIN << Math.min(confirmed, 5));
+    }
+
+    /** The cheaper path by the current figures, with the margin parallel has to clear. */
+    private boolean prefersParallel(int i) {
+        long p = this.parallelNanos[i];
+        long s = this.serialNanos[i];
+        if (p == 0 || s == 0) {
+            // Nothing to compare yet: take the path we have not measured.
+            return p == 0;
+        }
+        return p + (p >> 4) < s;
     }
 
     private boolean wantsParallel(int i) {
         if (!SkeinConfig.Live.adaptive) {
             return true;
         }
-        boolean prefer;
+        boolean prefer = prefersParallel(i);
         long p = this.parallelNanos[i];
         long s = this.serialNanos[i];
-        if (p == 0 || s == 0) {
-            // Nothing to compare yet: take the path we have not measured.
-            prefer = p == 0;
-        } else {
-            prefer = p + (p >> 4) < s;
-        }
-        if (++this.sinceProbe[i] >= probeInterval(p, s)) {
+        if (p != 0 && s != 0 && ++this.sinceProbe[i] >= probeInterval(p, s, this.confirmed[i])) {
             this.sinceProbe[i] = 0;
+            this.probing[i] = true;
             return !prefer;
         }
         return prefer;

@@ -54,6 +54,14 @@ import java.util.stream.Stream;
  * speeds them up. {@code getInRange} is collected inside the lock for the
  * reason {@code getInChunk} is.
  *
+ * <p>A call made while this thread already holds the lock -- one of vanilla's
+ * searches reaching {@code getInChunk} and {@code getOrLoad} for every chunk and
+ * slice it covers, several thousand times per villager looking for a job site --
+ * runs straight through: the outer call is what protects it. Its stream is then
+ * left lazy, as vanilla's, because every outermost locked method either returns
+ * a plain value or collects its stream before it lets go, so a nested stream is
+ * always consumed under the lock.
+ *
  * <p>Not wrapped: {@code ensureLoadedAndValid}, which ends in
  * {@code getChunk}. Holding a lock across chunk loading is the one thing this
  * lock must not do; the {@code getOrLoad} calls inside it are covered on their
@@ -74,6 +82,9 @@ public abstract class PoiManagerMixin {
                                                 PoiManager.Occupancy status,
                                                 Operation<Stream<PoiRecord>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, posChunk, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, posChunk, status).toList().stream();
@@ -92,6 +103,9 @@ public abstract class PoiManagerMixin {
         // and taking that space have to be one step or two villagers take the
         // same one.
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, combinedTypePosPredicate, pos, distance);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, combinedTypePosPredicate, pos, distance);
@@ -103,6 +117,9 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "release")
     private boolean skein$lockRelease(BlockPos pos, Operation<Boolean> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(pos);
+        }
         lock.lock();
         try {
             return original.call(pos);
@@ -114,6 +131,9 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "add")
     private PoiRecord skein$lockAdd(BlockPos pos, Holder<PoiType> type, Operation<PoiRecord> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(pos, type);
+        }
         lock.lock();
         try {
             return original.call(pos, type);
@@ -125,6 +145,10 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "remove(Lnet/minecraft/core/BlockPos;)V")
     private void skein$lockRemovePoi(BlockPos pos, Operation<Void> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            original.call(pos);
+            return;
+        }
         lock.lock();
         try {
             original.call(pos);
@@ -137,6 +161,9 @@ public abstract class PoiManagerMixin {
     private boolean skein$lockExists(BlockPos pos, Predicate<Holder<PoiType>> typePredicate,
                                      Operation<Boolean> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(pos, typePredicate);
+        }
         lock.lock();
         try {
             return original.call(pos, typePredicate);
@@ -149,6 +176,9 @@ public abstract class PoiManagerMixin {
     private Optional<Holder<PoiType>> skein$lockGetType(BlockPos pos,
                                                         Operation<Optional<Holder<PoiType>>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(pos);
+        }
         lock.lock();
         try {
             return original.call(pos);
@@ -160,6 +190,9 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "sectionsToVillage")
     private int skein$lockSectionsToVillage(SectionPos sectionPos, Operation<Integer> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(sectionPos);
+        }
         lock.lock();
         try {
             return original.call(sectionPos);
@@ -176,6 +209,10 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "setDirty")
     private void skein$lockSetDirty(long sectionPos, Operation<Void> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            original.call(sectionPos);
+            return;
+        }
         lock.lock();
         try {
             original.call(sectionPos);
@@ -187,6 +224,10 @@ public abstract class PoiManagerMixin {
     @WrapMethod(method = "tick")
     private void skein$lockTick(BooleanSupplier aheadOfTime, Operation<Void> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            original.call(aheadOfTime);
+            return;
+        }
         lock.lock();
         try {
             original.call(aheadOfTime);
@@ -199,6 +240,10 @@ public abstract class PoiManagerMixin {
     private void skein$lockCheckConsistency(SectionPos sectionPos, LevelChunkSection levelChunkSection,
                                             Operation<Void> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            original.call(sectionPos, levelChunkSection);
+            return;
+        }
         lock.lock();
         try {
             original.call(sectionPos, levelChunkSection);
@@ -211,6 +256,9 @@ public abstract class PoiManagerMixin {
     private Stream<PoiRecord> skein$lockInRange(Predicate<Holder<PoiType>> typePredicate, BlockPos pos, int distance,
                                                 PoiManager.Occupancy status, Operation<Stream<PoiRecord>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, pos, distance, status).toList().stream();
@@ -223,6 +271,9 @@ public abstract class PoiManagerMixin {
     private long skein$lockCountInRange(Predicate<Holder<PoiType>> typePredicate, BlockPos pos, int distance,
                                         PoiManager.Occupancy status, Operation<Long> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, pos, distance, status);
@@ -236,6 +287,9 @@ public abstract class PoiManagerMixin {
                                                      int distance, PoiManager.Occupancy status,
                                                      Operation<Optional<BlockPos>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, pos, distance, status);
@@ -250,6 +304,9 @@ public abstract class PoiManagerMixin {
                                                        PoiManager.Occupancy status,
                                                        Operation<Optional<BlockPos>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, posPredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, posPredicate, pos, distance, status);
@@ -263,6 +320,9 @@ public abstract class PoiManagerMixin {
             Predicate<Holder<PoiType>> typePredicate, BlockPos pos, int distance, PoiManager.Occupancy status,
             Operation<Optional<Pair<Holder<PoiType>, BlockPos>>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, pos, distance, status);
@@ -276,6 +336,9 @@ public abstract class PoiManagerMixin {
                                               BlockPos pos, int distance, PoiManager.Occupancy status,
                                               Operation<Optional<BlockPos>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, posPredicate, pos, distance, status);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, posPredicate, pos, distance, status);
@@ -290,6 +353,9 @@ public abstract class PoiManagerMixin {
                                                    BlockPos pos, int distance, RandomSource random,
                                                    Operation<Optional<BlockPos>> original) {
         ReentrantLock lock = skein$lock();
+        if (lock.isHeldByCurrentThread()) {
+            return original.call(typePredicate, posPredicate, status, pos, distance, random);
+        }
         lock.lock();
         try {
             return original.call(typePredicate, posPredicate, status, pos, distance, random);

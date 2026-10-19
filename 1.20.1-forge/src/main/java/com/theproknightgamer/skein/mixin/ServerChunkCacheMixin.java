@@ -188,9 +188,24 @@ public abstract class ServerChunkCacheMixin {
         if (local.level != this.level && local.level != null) {
             skein$refuseAcrossLevels(local.level);
         }
+        // `original` is only ever called here, never handed on: passed to a helper
+        // that is not inlined, it escapes, and the Operation the wrapper builds
+        // for every call -- cache hits included -- can no longer be scalar-replaced.
+        // It was one in twelve of the objects an entity-heavy tick allocated.
         if (!local.deferring) {
             if (local.level == this.level && SkeinConfig.Live.enabled) {
-                return skein$ownerChunkFetch(x, z, status, load, original, local);
+                // Dense, interacting work stays on its level owner but still
+                // benefits from a private cache.
+                long position = ChunkPos.asLong(x, z);
+                ChunkAccess cached = local.chunkSlots.get(this, ((SkeinLevel) this.level).skein$chunkGeneration(),
+                        position, status);
+                if (cached != null) {
+                    return cached;
+                }
+                // Retain the vanilla ticket, lifecycle and loading path on a miss.
+                ChunkAccess result = original.call(x, z, status, load);
+                skein$rememberOwnerFetch(position, status, result, local);
+                return result;
             }
             return original.call(x, z, status, load);
         }
@@ -201,30 +216,23 @@ public abstract class ServerChunkCacheMixin {
             local.chunkHits++;
             return cached;
         }
-        return skein$fetchUncached(x, z, status, load, original, local, position, generation);
+        return skein$fetchUncached(x, z, status, load, local, position, generation);
     }
 
-    /** Dense, interacting work stays on its level owner but still benefits from a private cache. */
+    /** Caches what the level owner fetched, unless the chunk is still mid-load. */
     @Unique
-    private ChunkAccess skein$ownerChunkFetch(int x, int z, ChunkStatus status, boolean load,
-            Operation<ChunkAccess> original, TickContext.Local local) {
-        SkeinLevel owner = (SkeinLevel) this.level;
-        long position = ChunkPos.asLong(x, z);
-        ChunkAccess cached = local.chunkSlots.get(this, owner.skein$chunkGeneration(), position, status);
-        if (cached != null) return cached;
-        // Retain the vanilla ticket, lifecycle and loading path on a miss.
-        ChunkAccess result = original.call(x, z, status, load);
+    private void skein$rememberOwnerFetch(long position, ChunkStatus status, ChunkAccess result,
+            TickContext.Local local) {
         ChunkHolder holder = ((ChunkMapAccess) this.chunkMap).skein$visibleHolder(position);
         if (result != null && holder != null && ((ChunkHolderAccess) holder).skein$currentlyLoading() == null) {
-            local.chunkSlots.put(this, owner.skein$chunkGeneration(), position, status, result);
+            local.chunkSlots.put(this, ((SkeinLevel) this.level).skein$chunkGeneration(), position, status, result);
         }
-        return result;
     }
 
     /** Keep ticket handling and the refusal out of the inlined cache-hit path. */
     @Unique
     private ChunkAccess skein$fetchUncached(int x, int z, ChunkStatus status, boolean load,
-            Operation<ChunkAccess> original, TickContext.Local local, long position, long generation) {
+            TickContext.Local local, long position, long generation) {
         ChunkSlots slots = local.chunkSlots;
         local.chunkMisses++;
 
