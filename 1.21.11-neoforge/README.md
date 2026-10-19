@@ -37,6 +37,11 @@ Every level advances exactly one tick, and none of them can run ahead of
 another. Dimensions share very little mutable state, which is what makes this
 half nearly free.
 
+The server thread does not just wait at the barrier: levels are handed out
+heaviest first and the server thread takes the first, so the busiest
+dimension's in-level passes have it as one more runner. A barrier's leftover
+runners are taken back in one sweep.
+
 The interception point is deliberately small. Rather than reimplement
 `tickChildren`, Skein redirects the single call that feeds its loop and hands
 back an empty array — so command functions still run before, connections and
@@ -342,6 +347,14 @@ frequent; far apart it is expensive and there is nothing to learn, so it backs
 off. That keeps the amortised cost of probing at roughly one per cent of the
 faster path however far apart the two are.
 
+One bad sample cannot hold a phase on the wrong path for long. A probe's
+measurement replaces the figure it re-times rather than nudging it an eighth of
+the way; a tick on the path in use counts for at most four times that path's
+average, so a garbage collection or a cold first tick cannot flip the choice on
+its own; and until probes have agreed with the choice a few times in a row, the
+wait for the next one is held to 100, 200, 400 ... ticks, whatever the ratio
+says.
+
 `/skein status` shows the current verdict and both estimates, which is usually
 the fastest way to understand why a phase is or is not threading:
 
@@ -414,9 +427,14 @@ not see Skein at all, and its chunk-manager thread check then throws
 `Async ticking server chunk manager` on Skein's dimension workers, which drops
 the nether and the end back to serial on their first tick. SuperChunk builds
 without the bridge keep the dimension-only compatibility policy. Entities, random blocks, block entities,
-and opted-in scheduled ticks can then use Skein's workers. Chunk generation,
+and scheduled ticks can then use Skein's workers. Chunk generation,
 lighting, and serialization stay with SuperChunk; Skein's parallel-saving phase
 is pinned off. Config reloads retain the compatibility policy.
+
+SuperChunk also runs a chunk task after every entity and block tick on the
+server thread (C2ME's mid-tick tasks). Such a task reaches the level's chunk
+system, so while the server thread is inside a cell it waits for the pass to
+end, and runs as before everywhere else.
 
 With SuperChunk, set `player.sendAtChunkSending=true` in `superchunk.properties`
 if your render distance is above your simulation distance. It is SuperChunk's
@@ -499,6 +517,12 @@ that and a reading of the mods' code turned up, and what Skein does about it:
   per-level set of chunks to force-load from every projectile's tick. Two shells
   in different cells corrupted it and a worker spun forever; the set now holds a
   lock.
+- **Alternate Current** keeps one wire handler per level, a scratchpad of node
+  maps and queues, and any parallel pass that changes a wire's input -- a
+  daylight detector, a pressure plate under a mob -- enters it. Each thread has
+  its own handler for each level, built by Alternate Current's own constructor
+  before levels tick and sharing the level handler's config. Tested with 100
+  detector-wire-lamp circuits through six day/night flips, matching vanilla.
 - **Large entities.** An entity is filed by whichever is larger, its follow range
   or its own box plus three blocks. A mob is a block or two wide and nothing
   changes; a Create contraption, a ship or another moving structure wider than a
@@ -993,6 +1017,8 @@ live path, because `sendChanges` clears that flag and the loop asks again.
     threadedProjectileQueries = true # ordered target lists for threaded vanilla snowballs/eggs
     parallelExplosionRays = true     # cast an explosion's rays and exposure checks on the pool
     threadedEntityTracking = true    # work out tracked entities' packets on the pool
+    collisionIndex = true            # collision lookups only ask entities that can be collided with
+    parallelPistonPushes = true      # spread a push of a big TNT or falling-block stack over the pool
     minEntities = 100
     pinPlayers = true
     loadedMarginChunks = 3     # tick on the level thread within this many chunks of one not FULL
@@ -1032,6 +1058,15 @@ setting if a mod makes ordinary vanilla snowballs or eggs hittable.
 See the [projectile measurements](docs/projectile-query-2026-09-22.md) for the
 2,000-snowball benchmark and collision checks.
 
+`entities.collisionIndex` and `entities.parallelPistonPushes` are the TNT-cannon
+work. A piston pushing a stack of primed TNT used to ask every TNT about every
+other one; the index answers collision queries from a per-section list of the
+entities that can be collided with at all (boats, shulkers, and modded entities
+that say so), with vanilla's answers, and steps aside if another mod changes
+`Entity`'s collision rules. A big push is spread over the pool, with section
+moves and block reactions replayed in vanilla's order, so the TNT ends exactly
+where vanilla puts it. See the [TNT-cannon report](docs/tnt-cannons-2026-10-10.md).
+
 Compatibility mixins have no config: `SkeinMixinPlugin` adds each one only when
 the mod it patches is installed, so a server without that mod never loads it.
 See the SpeeDeeEntity entry under Known limits.
@@ -1060,6 +1095,9 @@ See the SpeeDeeEntity entry under Known limits.
                  "minecraft:bell", "minecraft:end_gateway"]
 ```
 
+A config written by Skein 1.0.x keeps `scheduledTicks.enabled = false`, the old
+default; set it to `true` to run redstone in parallel.
+
 `marginBlocks` is a **correctness** knob, not a performance knob. It has to be
 at least the furthest a single tick reaches -- which for vanilla mobs is follow
 range rather than movement speed, and for blocks is a sapling becoming a large
@@ -1069,19 +1107,23 @@ coverage.
 
 A mob whose follow range is larger than the margin is not left to break the
 geometry: it is filed by that reach rather than as a point, so it has to sit its
-whole follow range inside its cell and falls to the serial set when no cell has
-room. Vanilla has several -- a zombie at 35, a bee or a blaze at 48, an enderman
+whole follow range inside its cell. Where no cell of the ordinary grid has room,
+it goes to a wider grid: four more passes over coarser cells, sized each tick so
+seven in eight such members fit, so a villager (follow range 48) ticks on a
+worker wherever it stands. Only footprints narrower than a cell less two margins
+are admitted; endermen, ghasts and large contraptions or ships stay on the level
+thread. Vanilla has several -- a zombie at 35, a bee or a blaze at 48, an enderman
 at 64, a ghast at 100 -- and a zombie alerting other zombies writes a target
-into every one of them at that range. Raising the margin buys those mobs back
-into the parallel set.
+into every one of them at that range. Raising the margin puts more of those mobs
+on the ordinary grid.
 
 `crashPolicy = DISABLE` logs the throwable, drops that dimension back to serial
 ticking for the rest of the session, and keeps the server up. `RETHROW` hands it
 to the server thread for a normal vanilla crash report -- use it when you are
 trying to *find* something rather than survive it.
 
-Turn phases off in this order if something is wrong: `scheduledTicks` first (it
-is off to begin with), then `blockEntities` (most exposed to other mods), then
+Turn phases off in this order if something is wrong: `scheduledTicks` first (the
+newest phase), then `blockEntities` (most exposed to other mods), then
 `entities`, then `randomTicks` (least -- a random tick reaches a few blocks and
 touches nothing level-wide), then `dimensions`.
 
@@ -1445,6 +1487,10 @@ Honest list, dimension threading first:
   writes and frozen game time. SpeeDeeEntity still owns the sweep, cache keys,
   collision math, and collider-index epoch rules. Caches live on the level so
   their entity references can be collected with an unloaded world.
+
+  SpeeDeeEntity 1.0.2 also reads the level's cache directly for its move memos,
+  air-region memo and collision hook. Those reads get the calling thread's cache
+  too, and a block write ends that cache's block epoch.
 
   No compatibility config is needed. The bridge is tested with legacy 1.0.1
   and indexed 1.0.2 on NeoForge 1.21.1; see

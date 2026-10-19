@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Multithreaded server ticking for Minecraft</b><br>
-  Forge and NeoForge &middot; 1.20.1, 1.21.1, 1.21.11 and 26.2 &middot; server-side only &middot; all rights reserved
+  Version 1.1.0 &middot; Forge and NeoForge &middot; 1.20.1, 1.21.1, 1.21.11 and 26.2 &middot; server-side only &middot; all rights reserved
 </p>
 
 ---
@@ -37,6 +37,22 @@ exactly where vanilla ends it. Players joining a server running Skein don't need
   square of the stack: every TNT asked about every other one. Skein answers those queries from a
   short per-section list of the entities that can actually be collided with, and spreads a big push
   over the worker threads. The TNT still ends up exactly where vanilla puts it.
+
+## What's new in 1.1.0
+
+- **Redstone in parallel, in vanilla's exact order**, on by default and timed both ways like the
+  other phases. Block entities can be ordered the same way (`blockEntities.vanillaOrderLimit`, opt-in).
+- **TNT cannons**: collision lookups only ask entities that can be collided with, and big piston
+  pushes are spread over the workers. The Orbital Skybender went from 288 to 54 ms/tick.
+- **Faster everywhere else**: villagers and other wide-reaching mobs get their own coarser passes
+  instead of the main thread, the governor re-measures properly, and the server thread takes the
+  busiest dimension. On 1.21.1 NeoForge, mobs 28%, mixed 20% and a quiet server 17% below 1.0.1.
+- **Compatibility**: Alternate Current, Create belts, SpeeDeeEntity 1.0.2 and SuperChunk's mid-tick
+  chunk tasks, wherever those mods exist for the version.
+- **All eight versions carry the same features**, and every one boots with every hook applied.
+
+Upgrading from 1.0.x: an existing `config/skein-common.toml` keeps `scheduledTicks.enabled = false`,
+the old default. Set it to `true` to run redstone in parallel.
 
 ## Versions
 
@@ -85,8 +101,8 @@ cheaper bookkeeping ([report](1.21.1-neoforge/docs/optimization-2026-10-09.md)).
 server, Skein stays within run-to-run noise of vanilla, because phases that don't pay switch off.
 
 **TNT cannons** (Orbital Skybender, 26.2 NeoForge, a 30,660-TNT payload): release 1.0.1 averaged
-288 ms/tick with 1.5-second spikes and built only 38% of the payload in nine minutes; the current
-source builds all of it at 54 ms/tick, and its biggest pushes went from 1.2 seconds to under 0.1
+288 ms/tick with 1.5-second spikes and built only 38% of the payload in nine minutes; with 1.1.0's
+TNT work it builds all of it at 54 ms/tick, and its biggest pushes went from 1.2 seconds to under 0.1
 ([report](26.2-neoforge/docs/tnt-cannons-2026-10-10.md)).
 
 ## Correctness
@@ -125,7 +141,8 @@ fixes for specific mods load only when that mod is installed. Tested with:
   own config mechanism, and takes over what they did where it matters (entity collision lookups).
 - **Create** (kinetic networks, belts, deployers, brass tunnels, redstone links, logistics),
   **Neruina**, **Cupboard**, **Ritchie's Projectile Library**, **Iron's Spellbooks**, **SuperChunk**,
-  **SpeeDeeEntity**, **Carpet** and **WorldEdit**, and on 1.21.1 NeoForge **Alternate Current**.
+  **SpeeDeeEntity**, **Carpet** and **WorldEdit**, and **Alternate Current** on NeoForge 1.21.1,
+  1.21.11 and 26.2.
 - Two large CurseForge packs, run with every modded block placed and every modded entity summoned:
   Create Chronicles (264 mods, 1.21.1) and Season-2_75 (230 mods, 1.20.1).
 
@@ -169,7 +186,8 @@ modded machine misbehaves, add its block entity to `blockEntities.blacklist`, or
     enabled = true             # redstone, fluids and falling blocks in parallel, in vanilla's order
 ```
 
-If something looks wrong, turn phases off in this order: `blockEntities`, `entities`, `randomTicks`, `dimensions`.
+If something looks wrong, turn phases off in this order: `scheduledTicks`, `blockEntities`, `entities`,
+`randomTicks`, `dimensions`.
 
 ## When it won't help
 
