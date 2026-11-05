@@ -730,12 +730,15 @@ public final class SkeinConfig {
                 return c != base;
             } catch (NoSuchMethodException keepWalking) {
                 // declared further up
-            } catch (LinkageError | TypeNotPresentException unlinkable) {
+            } catch (LinkageError | RuntimeException unlinkable) {
                 // Looking a method up resolves every type in the class's
                 // method signatures, and a mod's block can declare one that
                 // names a client-only class, which a dedicated server cannot
                 // load. Nothing can be learned about such a class, so it is
                 // treated as one that reacts: the safe answer, and the slow one.
+                // NeoForge's RuntimeDistCleaner reports those client-only
+                // signatures as a plain RuntimeException (and that also covers
+                // TypeNotPresentException), so both are caught here.
                 // Asked once: each attempt makes the class loader log errors.
                 if (UNLINKABLE.add(c)) {
                     Skein.LOGGER.info("Skein: {} declares a method naming a class this server cannot load ({}). "
